@@ -1,0 +1,200 @@
+import {
+  CanonicalEvent,
+  ExecutionRequest,
+  ParticipantRef,
+  SessionState
+} from './control-plane';
+
+export interface RuntimeCredentials {
+  metadata: Record<string, string>;
+  sender: string;
+}
+
+export interface RuntimeEnvelope {
+  macpVersion: string;
+  mode: string;
+  messageType: string;
+  messageId: string;
+  sessionId: string;
+  sender: string;
+  timestampUnixMs: number;
+  payload: Buffer;
+}
+
+export interface RuntimeAck {
+  ok: boolean;
+  duplicate: boolean;
+  messageId: string;
+  sessionId: string;
+  acceptedAtUnixMs: number;
+  sessionState: SessionState;
+  error?: {
+    code: string;
+    message: string;
+    sessionId?: string;
+    messageId?: string;
+    detailsBase64?: string;
+  };
+}
+
+export interface RawRuntimeEvent {
+  kind: 'stream-envelope' | 'session-snapshot' | 'send-ack' | 'stream-status';
+  receivedAt: string;
+  envelope?: RuntimeEnvelope;
+  sessionSnapshot?: RuntimeSessionSnapshot;
+  ack?: RuntimeAck;
+  streamStatus?: {
+    status: 'opened' | 'reconnecting' | 'closed';
+    detail?: string;
+  };
+}
+
+export interface RuntimeInitializeRequest {
+  clientName: string;
+  clientVersion: string;
+}
+
+export interface RuntimeInitializeResult {
+  selectedProtocolVersion: string;
+  runtimeInfo: {
+    name: string;
+    title?: string;
+    version?: string;
+    description?: string;
+    websiteUrl?: string;
+  };
+  supportedModes: string[];
+}
+
+export interface RuntimeStartSessionRequest {
+  runId: string;
+  execution: ExecutionRequest;
+}
+
+export interface RuntimeStartSessionResult {
+  runtimeSessionId: string;
+  initiator: string;
+  ack: RuntimeAck;
+}
+
+export interface RuntimeSendRequest {
+  runId: string;
+  runtimeSessionId: string;
+  modeName: string;
+  from: string;
+  to: string[];
+  messageType: string;
+  payload: Buffer;
+  payloadDescriptor?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RuntimeSendResult {
+  ack: RuntimeAck;
+  envelope: RuntimeEnvelope;
+}
+
+export interface RuntimeStreamSessionRequest {
+  runId: string;
+  runtimeSessionId: string;
+  modeName: string;
+  subscriberId: string;
+}
+
+export interface RuntimeGetSessionRequest {
+  runId: string;
+  runtimeSessionId: string;
+  requesterId?: string;
+}
+
+export interface RuntimeSessionSnapshot {
+  sessionId: string;
+  mode: string;
+  state: SessionState;
+  startedAtUnixMs?: number;
+  expiresAtUnixMs?: number;
+  modeVersion?: string;
+  configurationVersion?: string;
+  policyVersion?: string;
+}
+
+export interface RuntimeCancelSessionRequest {
+  runId: string;
+  runtimeSessionId: string;
+  reason?: string;
+  requesterId?: string;
+}
+
+export interface RuntimeCancelResult {
+  ack: RuntimeAck;
+}
+
+export interface RuntimeManifestResult {
+  agentId: string;
+  title?: string;
+  description?: string;
+  supportedModes: string[];
+  metadata?: Record<string, string>;
+}
+
+export interface RuntimeModeDescriptor {
+  mode: string;
+  modeVersion: string;
+  title?: string;
+  description?: string;
+  determinismClass?: string;
+  participantModel?: string;
+  messageTypes: string[];
+  terminalMessageTypes: string[];
+  schemaUris?: Record<string, string>;
+}
+
+export interface RuntimeRootDescriptor {
+  uri: string;
+  name?: string;
+}
+
+export interface RuntimeHealth {
+  ok: boolean;
+  runtimeKind: string;
+  detail?: string;
+  manifest?: RuntimeManifestResult;
+}
+
+export interface RuntimeCallOptions {
+  deadline?: Date;
+}
+
+export interface RuntimeProvider {
+  readonly kind: string;
+
+  initialize(req: RuntimeInitializeRequest, opts?: RuntimeCallOptions): Promise<RuntimeInitializeResult>;
+  startSession(req: RuntimeStartSessionRequest, opts?: RuntimeCallOptions): Promise<RuntimeStartSessionResult>;
+  send(req: RuntimeSendRequest): Promise<RuntimeSendResult>;
+  streamSession(req: RuntimeStreamSessionRequest): AsyncIterable<RawRuntimeEvent>;
+  getSession(req: RuntimeGetSessionRequest): Promise<RuntimeSessionSnapshot>;
+  cancelSession(req: RuntimeCancelSessionRequest): Promise<RuntimeCancelResult>;
+  getManifest(): Promise<RuntimeManifestResult>;
+  listModes(): Promise<RuntimeModeDescriptor[]>;
+  listRoots(): Promise<RuntimeRootDescriptor[]>;
+  health(): Promise<RuntimeHealth>;
+}
+
+export interface RuntimeCredentialResolver {
+  resolve(req: {
+    runtimeKind: string;
+    requester?: { actorId?: string; actorType?: string };
+    participant?: ParticipantRef;
+    fallbackSender?: string;
+  }): Promise<RuntimeCredentials>;
+}
+
+export interface NormalizeContext {
+  knownParticipants: Set<string>;
+  execution: ExecutionRequest;
+  runtimeSessionId: string;
+}
+
+export interface EventNormalizer {
+  normalize(runId: string, rawEvent: RawRuntimeEvent, ctx: NormalizeContext): CanonicalEvent[];
+}

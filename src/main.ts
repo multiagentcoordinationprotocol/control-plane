@@ -1,0 +1,53 @@
+import 'reflect-metadata';
+import { ValidationPipe } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import * as express from 'express';
+import { AppModule } from './app.module';
+import { AppConfigService } from './config/app-config.service';
+import { GlobalExceptionFilter } from './errors/exception.filter';
+import { startTelemetry, stopTelemetry } from './telemetry/telemetry';
+
+async function bootstrap() {
+  const config = new AppConfigService();
+  await startTelemetry({
+    enabled: config.otelEnabled,
+    serviceName: config.otelServiceName
+  });
+
+  const app = await NestFactory.create(AppModule, { cors: false });
+  app.use(express.json({ limit: '1mb' }));
+  app.useGlobalFilters(new GlobalExceptionFilter());
+  app.enableCors({ origin: config.corsOrigin, credentials: true });
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: false
+    })
+  );
+
+  const swagger = new DocumentBuilder()
+    .setTitle('MACP Control Plane')
+    .setDescription('Scenario-agnostic execution and observability plane for the MACP runtime')
+    .setVersion('0.1.0')
+    .build();
+  const document = SwaggerModule.createDocument(app, swagger);
+  SwaggerModule.setup('docs', app, document);
+
+  app.enableShutdownHooks();
+
+  await app.listen(config.port, config.host);
+
+  const shutdown = async () => {
+    await app.close();
+    await stopTelemetry();
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+bootstrap().catch((err) => {
+  console.error('bootstrap failed', err);
+  process.exit(1);
+});

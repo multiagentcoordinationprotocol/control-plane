@@ -1,0 +1,211 @@
+import { Injectable, Logger } from '@nestjs/common';
+import {
+  CanonicalEvent,
+  GraphProjection,
+  ParticipantProjection,
+  RunStateProjection,
+  RunSummaryProjection
+} from '../contracts/control-plane';
+import { ProjectionRepository } from '../storage/projection.repository';
+
+@Injectable()
+export class ProjectionService {
+  private readonly logger = new Logger(ProjectionService.name);
+
+  constructor(private readonly projectionRepository: ProjectionRepository) {}
+
+  async get(runId: string): Promise<RunStateProjection | null> {
+    const row = await this.projectionRepository.get(runId);
+    if (!row) return null;
+    return {
+      run: row.runSummary as unknown as RunSummaryProjection,
+      participants: row.participants as unknown as ParticipantProjection[],
+      graph: row.graph as unknown as GraphProjection,
+      decision: row.decision as unknown as RunStateProjection['decision'],
+      signals: row.signals as unknown as RunStateProjection['signals'],
+      timeline: row.timeline as unknown as RunStateProjection['timeline'],
+      trace: row.traceSummary as unknown as RunStateProjection['trace']
+    };
+  }
+
+  async applyAndPersist(runId: string, events: CanonicalEvent[]): Promise<RunStateProjection> {
+    const current = (await this.get(runId)) ?? this.empty(runId);
+    const next = this.applyEvents(current, events);
+    const version = (events.at(-1)?.seq ?? current.timeline.latestSeq) || 0;
+    await this.projectionRepository.upsert(runId, next, version);
+    return next;
+  }
+
+  applyEvents(current: RunStateProjection, events: CanonicalEvent[]): RunStateProjection {
+    let next: RunStateProjection;
+    try {
+      next = structuredClone(current);
+    } catch {
+      this.logger.warn('structuredClone failed, falling back to JSON round-trip');
+      next = JSON.parse(JSON.stringify(current));
+    }
+
+    for (const event of events) {
+      next.timeline.latestSeq = event.seq;
+      next.timeline.totalEvents += 1;
+      next.timeline.recent = [...next.timeline.recent, {
+        id: event.id,
+        seq: event.seq,
+        ts: event.ts,
+        type: event.type,
+        subject: event.subject
+      }].slice(-50);
+
+      if (event.trace?.traceId) {
+        next.trace.traceId = event.trace.traceId;
+      }
+      if (event.trace?.spanId) {
+        next.trace.lastSpanId = event.trace.spanId;
+        next.trace.spanCount += 1;
+      }
+
+      switch (event.type) {
+        case 'run.created':
+        case 'run.started':
+        case 'run.completed':
+        case 'run.failed':
+        case 'run.cancelled': {
+          next.run = {
+            ...next.run,
+            runId: current.run.runId || event.runId,
+            status: (event.data.status as RunSummaryProjection['status']) ?? next.run.status,
+            runtimeSessionId: (event.data.runtimeSessionId as string | undefined) ?? next.run.runtimeSessionId,
+            startedAt: (event.data.startedAt as string | undefined) ?? next.run.startedAt,
+            endedAt: (event.data.endedAt as string | undefined) ?? next.run.endedAt,
+            traceId: (event.data.traceId as string | undefined) ?? next.run.traceId,
+            modeName: (event.data.modeName as string | undefined) ?? next.run.modeName
+          };
+          break;
+        }
+        case 'session.bound':
+        case 'session.state.changed': {
+          next.run.runtimeSessionId = (event.data.sessionId as string | undefined) ?? next.run.runtimeSessionId;
+          if (typeof event.data.state === 'string') {
+            if (event.data.state === 'SESSION_STATE_RESOLVED') next.run.status = 'completed';
+            if (event.data.state === 'SESSION_STATE_EXPIRED') next.run.status = 'failed';
+          }
+          break;
+        }
+        case 'participant.seen': {
+          const participantId = String(event.data.participantId ?? event.subject?.id ?? '');
+          if (!next.participants.find((participant) => participant.participantId === participantId)) {
+            next.participants.push({ participantId, status: 'idle' });
+            next.graph.nodes.push({ id: participantId, kind: 'participant', status: 'idle' });
+          }
+          break;
+        }
+        case 'message.sent':
+        case 'message.received': {
+          const sender = String(event.data.sender ?? event.data.from ?? '');
+          const recipients = (event.data.to as string[] | undefined) ?? [];
+          this.touchParticipant(next, sender, event.ts, 'active', String(event.data.messageType ?? event.type));
+          recipients.forEach((recipient) => this.touchParticipant(next, recipient, event.ts, 'waiting', undefined));
+          recipients.forEach((recipient) => {
+            if (sender && recipient) {
+              next.graph.edges.push({ from: sender, to: recipient, kind: event.type, ts: event.ts });
+            }
+          });
+          next.graph.edges = next.graph.edges.slice(-200);
+          break;
+        }
+        case 'signal.emitted': {
+          const decodedPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          next.signals.signals = [
+            ...next.signals.signals,
+            {
+              id: event.subject?.id ?? event.id,
+              name: String(decodedPayload?.signalType ?? event.data.messageType ?? 'Signal'),
+              severity: decodedPayload?.severity as string | undefined,
+              sourceParticipantId: (event.data.sender as string | undefined) ?? undefined,
+              ts: event.ts,
+              confidence: safeOptionalNumber(decodedPayload?.confidence)
+            }
+          ].slice(-200);
+          break;
+        }
+        case 'proposal.created':
+        case 'proposal.updated': {
+          const proposalPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          next.decision.current = {
+            action: String(proposalPayload?.proposalId ?? proposalPayload?.requestId ?? event.subject?.id ?? 'proposal'),
+            confidence: safeOptionalNumber(proposalPayload?.confidence) ?? next.decision.current?.confidence,
+            reasons: [String(proposalPayload?.reason ?? proposalPayload?.summary ?? proposalPayload?.rationale ?? event.type)].filter(Boolean),
+            finalized: false,
+            proposalId: String(proposalPayload?.proposalId ?? proposalPayload?.requestId ?? event.subject?.id ?? '')
+          };
+          break;
+        }
+        case 'decision.finalized': {
+          const payload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          next.decision.current = {
+            action: String(payload?.action ?? 'resolved'),
+            confidence: safeOptionalNumber(payload?.confidence) ?? next.decision.current?.confidence,
+            reasons: [String(payload?.reason ?? 'Commitment observed')],
+            finalized: true,
+            proposalId: String(payload?.commitmentId ?? next.decision.current?.proposalId ?? '')
+          };
+          next.run.status = 'completed';
+          break;
+        }
+        case 'artifact.created': {
+          const artifactId = String(event.subject?.id ?? event.id);
+          next.trace.linkedArtifacts = [...new Set([...next.trace.linkedArtifacts, artifactId])];
+          break;
+        }
+        default:
+          break;
+      }
+    }
+
+    return next;
+  }
+
+  async replayStateAt(runId: string, events: CanonicalEvent[]): Promise<RunStateProjection> {
+    return this.applyEvents(this.empty(runId), events);
+  }
+
+  empty(runId: string): RunStateProjection {
+    return {
+      run: { runId, status: 'queued' },
+      participants: [],
+      graph: { nodes: [], edges: [] },
+      decision: {},
+      signals: { signals: [] },
+      timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
+      trace: { spanCount: 0, linkedArtifacts: [] }
+    };
+  }
+
+  private touchParticipant(
+    projection: RunStateProjection,
+    participantId: string,
+    ts: string,
+    status: ParticipantProjection['status'],
+    summary?: string
+  ) {
+    if (!participantId) return;
+    let participant = projection.participants.find((item) => item.participantId === participantId);
+    if (!participant) {
+      participant = { participantId, status: 'idle' };
+      projection.participants.push(participant);
+      projection.graph.nodes.push({ id: participantId, kind: 'participant', status: 'idle' });
+    }
+    participant.status = status;
+    participant.latestActivityAt = ts;
+    if (summary) participant.latestSummary = summary;
+
+    const node = projection.graph.nodes.find((item) => item.id === participantId);
+    if (node) node.status = status;
+  }
+}
+
+function safeOptionalNumber(val: unknown): number | undefined {
+  if (val === undefined || val === null) return undefined;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : undefined;
+}

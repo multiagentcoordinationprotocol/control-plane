@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: macp_control_plane
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    build: .
+    command: ['npx', 'drizzle-kit', 'migrate']
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/macp_control_plane
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  control-plane:
+    build: .
+    ports:
+      - '3001:3001'
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/macp_control_plane
+      RUNTIME_ADDRESS: host.docker.internal:50051
+      RUNTIME_ALLOW_INSECURE: 'true'
+      RUNTIME_USE_DEV_HEADER: 'true'
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
