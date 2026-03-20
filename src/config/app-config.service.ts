@@ -59,8 +59,10 @@ export class AppConfigService implements OnModuleInit {
   readonly streamMaxRetries = readNumber('STREAM_MAX_RETRIES', 5);
   readonly streamBackoffBaseMs = readNumber('STREAM_BACKOFF_BASE_MS', 250);
   readonly streamBackoffMaxMs = readNumber('STREAM_BACKOFF_MAX_MS', 30000);
+  readonly streamSseHeartbeatMs = readNumber('STREAM_SSE_HEARTBEAT_MS', 15000);
   readonly replayMaxDelayMs = readNumber('REPLAY_MAX_DELAY_MS', 2000);
   readonly replayBatchSize = readNumber('REPLAY_BATCH_SIZE', 500);
+  readonly runRecoveryEnabled = readBoolean('RUN_RECOVERY_ENABLED', true);
 
   readonly dbPoolMax = readNumber('DB_POOL_MAX', 20);
   readonly dbPoolIdleTimeout = readNumber('DB_POOL_IDLE_TIMEOUT', 30000);

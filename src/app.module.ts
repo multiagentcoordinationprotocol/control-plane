@@ -8,6 +8,7 @@ import { ConfigModule } from './config/config.module';
 import { HealthController } from './controllers/health.controller';
 import { MetricsController } from './controllers/metrics.controller';
 import { ObservabilityController } from './controllers/observability.controller';
+import { RunInsightsController } from './controllers/run-insights.controller';
 import { RunsController } from './controllers/runs.controller';
 import { RuntimeController } from './controllers/runtime.controller';
 import { DatabaseModule } from './db/database.module';
@@ -33,8 +34,10 @@ import { RunRepository } from './storage/run.repository';
 import { RuntimeSessionRepository } from './storage/runtime-session.repository';
 import { InstrumentationService } from './telemetry/instrumentation.service';
 import { TraceService } from './telemetry/trace.service';
+import { RunInsightsService } from './insights/run-insights.service';
 import { RunExecutorService } from './runs/run-executor.service';
 import { RunManagerService } from './runs/run-manager.service';
+import { RunRecoveryService } from './runs/run-recovery.service';
 import { StreamConsumerService } from './runs/stream-consumer.service';
 
 @Module({
@@ -44,7 +47,7 @@ import { StreamConsumerService } from './runs/stream-consumer.service';
     AuthModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])
   ],
-  controllers: [RunsController, RuntimeController, ObservabilityController, HealthController, MetricsController],
+  controllers: [RunsController, RunInsightsController, RuntimeController, ObservabilityController, HealthController, MetricsController],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: ThrottleByUserGuard },
@@ -70,7 +73,9 @@ import { StreamConsumerService } from './runs/stream-consumer.service';
     ReplayService,
     RunManagerService,
     StreamConsumerService,
-    RunExecutorService
+    RunExecutorService,
+    RunRecoveryService,
+    RunInsightsService
   ]
 })
 export class AppModule implements NestModule {

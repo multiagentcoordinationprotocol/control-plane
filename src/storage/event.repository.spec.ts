@@ -176,6 +176,50 @@ describe('EventRepository', () => {
     });
   });
 
+  // ------ listCanonicalRange ------
+  describe('listCanonicalRange', () => {
+    it('queries with runId, afterSeq, toSeq and limit', async () => {
+      const fakeEvents = [{ id: 'evt-1', seq: 3 }];
+      mockDb._select.limit.mockResolvedValue(fakeEvents);
+
+      const result = await repo.listCanonicalRange('run-1', 2, 10, 100);
+
+      expect(mockDb.select).toHaveBeenCalled();
+      expect(mockDb._select.from).toHaveBeenCalled();
+      expect(mockDb._select.where).toHaveBeenCalled();
+      expect(result).toEqual(fakeEvents);
+    });
+
+    it('uses default limit of 500', async () => {
+      mockDb._select.limit.mockResolvedValue([]);
+
+      await repo.listCanonicalRange('run-1', 0, 100);
+
+      expect(mockDb._select.limit).toHaveBeenCalledWith(500);
+    });
+  });
+
+  // ------ listRawByRun ------
+  describe('listRawByRun', () => {
+    it('queries raw events by runId with afterSeq', async () => {
+      const fakeEvents = [{ id: 'raw-1', seq: 1 }];
+      mockDb._select.limit.mockResolvedValue(fakeEvents);
+
+      const result = await repo.listRawByRun('run-1', 0, 500);
+
+      expect(mockDb.select).toHaveBeenCalled();
+      expect(result).toEqual(fakeEvents);
+    });
+
+    it('uses default afterSeq of 0 and limit of 1000', async () => {
+      mockDb._select.limit.mockResolvedValue([]);
+
+      await repo.listRawByRun('run-1');
+
+      expect(mockDb._select.limit).toHaveBeenCalledWith(1000);
+    });
+  });
+
   // ------ listCanonicalUpTo ------
   describe('listCanonicalUpTo', () => {
     it('queries without upper bound when seq is undefined', async () => {

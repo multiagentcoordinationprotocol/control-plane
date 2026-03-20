@@ -59,6 +59,30 @@ export class EventRepository {
       .limit(limit);
   }
 
+  async listCanonicalRange(runId: string, afterSeq: number, toSeq: number, limit = 500) {
+    return this.database.db
+      .select()
+      .from(runEventsCanonical)
+      .where(
+        and(
+          eq(runEventsCanonical.runId, runId),
+          gt(runEventsCanonical.seq, afterSeq),
+          lte(runEventsCanonical.seq, toSeq)
+        )
+      )
+      .orderBy(asc(runEventsCanonical.seq))
+      .limit(limit);
+  }
+
+  async listRawByRun(runId: string, afterSeq = 0, limit = 1000) {
+    return this.database.db
+      .select()
+      .from(runEventsRaw)
+      .where(and(eq(runEventsRaw.runId, runId), gt(runEventsRaw.seq, afterSeq)))
+      .orderBy(asc(runEventsRaw.seq))
+      .limit(limit);
+  }
+
   async listCanonicalUpTo(runId: string, seq?: number) {
     const where = seq === undefined
       ? eq(runEventsCanonical.runId, runId)

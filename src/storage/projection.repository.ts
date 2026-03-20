@@ -30,6 +30,7 @@ export class ProjectionRepository {
         signals: projection.signals as unknown as Record<string, unknown>,
         timeline: projection.timeline as unknown as Record<string, unknown>,
         traceSummary: projection.trace as unknown as Record<string, unknown>,
+        progress: projection.progress as unknown as Record<string, unknown>,
         updatedAt: new Date().toISOString()
       })
       .onConflictDoUpdate({
@@ -43,6 +44,7 @@ export class ProjectionRepository {
           signals: projection.signals as unknown as Record<string, unknown>,
           timeline: projection.timeline as unknown as Record<string, unknown>,
           traceSummary: projection.trace as unknown as Record<string, unknown>,
+          progress: projection.progress as unknown as Record<string, unknown>,
           updatedAt: new Date().toISOString()
         }
       });
