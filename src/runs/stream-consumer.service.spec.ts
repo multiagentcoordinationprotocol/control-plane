@@ -264,14 +264,57 @@ describe('StreamConsumerService', () => {
   });
 
   describe('isHealthy()', () => {
-    it('should always return true', () => {
+    it('should return true when no active streams', () => {
+      expect(service.isHealthy()).toBe(true);
+    });
+
+    it('should return false when a stream is active but not connected', async () => {
+      const neverEndingIterable: AsyncIterable<any> = {
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => new Promise(() => {}),
+          };
+        },
+      };
+
+      const mockProvider = {
+        streamSession: jest.fn().mockReturnValue(neverEndingIterable),
+        getSession: jest.fn(),
+      };
+      runtimeRegistry.get.mockReturnValue(mockProvider as any);
+
+      await service.start({
+        runId: 'health-run',
+        execution: {
+          mode: 'live' as const,
+          runtime: { kind: 'rust' },
+          session: {
+            modeName: 'decision',
+            modeVersion: '1.0',
+            configurationVersion: '1.0',
+            ttlMs: 60000,
+            participants: [{ id: 'agent-1' }],
+          },
+        },
+        runtimeKind: 'rust',
+        runtimeSessionId: 'session-1',
+        subscriberId: 'sub-1',
+      });
+
+      // Stream is active but not yet connected
+      expect(service.isHealthy()).toBe(false);
+
+      // Manually mark as connected to verify the other branch
+      const activeMap = (service as any).active as Map<string, any>;
+      const marker = activeMap.get('health-run')!;
+      marker.connected = true;
       expect(service.isHealthy()).toBe(true);
     });
   });
 
   describe('finalizeRun idempotency', () => {
     it('should only finalize once even when called multiple times', async () => {
-      const marker = { aborted: false, finalized: false, lastProcessedSeq: 0 };
+      const marker = { aborted: false, finalized: false, connected: true, lastProcessedSeq: 0 };
 
       // Access the private finalizeRun method
       const finalizeRun = (service as any).finalizeRun.bind(service);
@@ -289,7 +332,7 @@ describe('StreamConsumerService', () => {
     });
 
     it('should call markFailed for failed status', async () => {
-      const marker = { aborted: false, finalized: false, lastProcessedSeq: 0 };
+      const marker = { aborted: false, finalized: false, connected: true, lastProcessedSeq: 0 };
       const finalizeRun = (service as any).finalizeRun.bind(service);
       const error = new Error('something went wrong');
 

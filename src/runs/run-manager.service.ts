@@ -1,11 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { ExecutionRequest, RunStateProjection } from '../contracts/control-plane';
+import { AuditService } from '../audit/audit.service';
 import { TraceService } from '../telemetry/trace.service';
 import { ProjectionService } from '../projection/projection.service';
 import { RunEventService } from '../events/run-event.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
+import { WebhookService } from '../webhooks/webhook.service';
 
 @Injectable()
 export class RunManagerService {
@@ -14,7 +16,9 @@ export class RunManagerService {
     private readonly runtimeSessionRepository: RuntimeSessionRepository,
     private readonly projectionService: ProjectionService,
     private readonly runEventService: RunEventService,
-    private readonly traceService: TraceService
+    private readonly traceService: TraceService,
+    private readonly auditService: AuditService,
+    private readonly webhookService: WebhookService
   ) {}
 
   async createRun(request: ExecutionRequest) {
@@ -172,6 +176,12 @@ export class RunManagerService {
         }
       }
     ]);
+    void this.webhookService.fireEvent({
+      event: 'run.started',
+      runId,
+      status: 'running',
+      timestamp: new Date().toISOString()
+    });
     return run;
   }
 
@@ -195,6 +205,12 @@ export class RunManagerService {
         }
       }
     ]);
+    void this.webhookService.fireEvent({
+      event: 'run.completed',
+      runId,
+      status: 'completed',
+      timestamp: new Date().toISOString()
+    });
     return run;
   }
 
@@ -218,6 +234,12 @@ export class RunManagerService {
         }
       }
     ]);
+    void this.webhookService.fireEvent({
+      event: 'run.cancelled',
+      runId,
+      status: 'cancelled',
+      timestamp: new Date().toISOString()
+    });
     return run;
   }
 
@@ -243,6 +265,13 @@ export class RunManagerService {
         }
       }
     ]);
+    void this.webhookService.fireEvent({
+      event: 'run.failed',
+      runId,
+      status: 'failed',
+      timestamp: new Date().toISOString(),
+      data: { error: message }
+    });
     return run;
   }
 
@@ -255,8 +284,49 @@ export class RunManagerService {
     offset?: number;
     sortBy?: 'createdAt' | 'updatedAt';
     sortOrder?: 'asc' | 'desc';
+    includeArchived?: boolean;
   }) {
-    return this.runRepository.list(filters);
+    const limit = filters.limit ?? 50;
+    const offset = filters.offset ?? 0;
+    const [data, total] = await Promise.all([
+      this.runRepository.list(filters),
+      this.runRepository.listCount({
+        status: filters.status,
+        tags: filters.tags,
+        createdAfter: filters.createdAfter,
+        createdBefore: filters.createdBefore,
+        includeArchived: filters.includeArchived,
+      }),
+    ]);
+    return { data, total, limit, offset };
+  }
+
+  async deleteRun(runId: string) {
+    const run = await this.getRun(runId);
+    const terminalStatuses = ['completed', 'failed', 'cancelled'];
+    if (!terminalStatuses.includes(run.status)) {
+      throw new BadRequestException('only terminal runs (completed, failed, cancelled) can be deleted');
+    }
+    await this.auditService.record({
+      actor: 'control-plane',
+      actorType: 'system',
+      action: 'run.deleted',
+      resource: 'run',
+      resourceId: runId
+    });
+    await this.runRepository.delete(runId);
+  }
+
+  async archiveRun(runId: string) {
+    await this.getRun(runId);
+    await this.auditService.record({
+      actor: 'control-plane',
+      actorType: 'system',
+      action: 'run.archived',
+      resource: 'run',
+      resourceId: runId
+    });
+    return this.runRepository.addTag(runId, 'archived');
   }
 
   async getRun(runId: string) {

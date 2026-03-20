@@ -44,6 +44,16 @@ export class InstrumentationService implements OnModuleInit {
     help: 'Circuit breaker state (0=closed, 1=half_open, 2=open)'
   });
 
+  readonly circuitBreakerFailuresTotal = new client.Counter({
+    name: 'macp_circuit_breaker_failures_total',
+    help: 'Total circuit breaker failure count'
+  });
+
+  readonly circuitBreakerSuccessTotal = new client.Counter({
+    name: 'macp_circuit_breaker_success_total',
+    help: 'Total circuit breaker success count'
+  });
+
   onModuleInit(): void {
     client.collectDefaultMetrics();
   }

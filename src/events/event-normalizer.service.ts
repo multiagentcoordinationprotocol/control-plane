@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { CanonicalEvent, CanonicalEventType } from '../contracts/control-plane';
 import { EventNormalizer, NormalizeContext, RawRuntimeEvent } from '../contracts/runtime';
+import { PROJECTION_SCHEMA_VERSION } from '../projection/projection.service';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
 
 @Injectable()
@@ -111,7 +112,7 @@ export class EventNormalizerService implements EventNormalizer {
           runId,
           ts,
           derivedType,
-          this.deriveSubject(derivedType, envelope),
+          this.deriveSubject(derivedType, envelope, decoded),
           {
             modeName: envelope.mode,
             messageType: envelope.messageType,
@@ -185,19 +186,31 @@ export class EventNormalizerService implements EventNormalizer {
     return null;
   }
 
-  private deriveSubject(type: CanonicalEventType, envelope: RawRuntimeEvent['envelope']): CanonicalEvent['subject'] {
+  private deriveSubject(
+    type: CanonicalEventType,
+    envelope: RawRuntimeEvent['envelope'],
+    decoded?: Record<string, unknown> | null
+  ): CanonicalEvent['subject'] {
     if (!envelope) return undefined;
+    const payload = decoded as Record<string, unknown> | undefined;
+
     switch (type) {
       case 'signal.emitted':
         return { kind: 'signal', id: envelope.messageId };
       case 'proposal.created':
-      case 'proposal.updated':
-        return { kind: 'proposal', id: envelope.messageId };
-      case 'decision.finalized':
-        return { kind: 'decision', id: envelope.messageId };
+      case 'proposal.updated': {
+        const proposalId = payload?.proposalId ?? payload?.proposal_id ?? payload?.requestId ?? payload?.request_id;
+        return { kind: 'proposal', id: String(proposalId ?? envelope.messageId) };
+      }
+      case 'decision.finalized': {
+        const decisionId = payload?.commitmentId ?? payload?.commitment_id ?? payload?.decisionId ?? payload?.decision_id;
+        return { kind: 'decision', id: String(decisionId ?? envelope.messageId) };
+      }
       case 'tool.called':
-      case 'tool.completed':
-        return { kind: 'tool', id: envelope.messageId };
+      case 'tool.completed': {
+        const toolCallId = payload?.toolCallId ?? payload?.tool_call_id ?? payload?.requestId ?? payload?.request_id;
+        return { kind: 'tool', id: String(toolCallId ?? envelope.messageId) };
+      }
       case 'progress.reported':
         return { kind: 'message', id: envelope.messageId };
       default:
@@ -219,7 +232,7 @@ export class EventNormalizerService implements EventNormalizer {
       seq: 0,
       ts,
       type,
-      schemaVersion: 1,
+      schemaVersion: PROJECTION_SCHEMA_VERSION,
       subject,
       source: {
         kind: 'runtime',

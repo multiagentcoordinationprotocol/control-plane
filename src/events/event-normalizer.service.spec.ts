@@ -213,7 +213,7 @@ describe('EventNormalizerService', () => {
 
       const decisionFinalized = events.find((e) => e.type === 'decision.finalized');
       expect(decisionFinalized).toBeDefined();
-      expect(decisionFinalized!.subject).toEqual({ kind: 'decision', id: 'msg-1' });
+      expect(decisionFinalized!.subject).toEqual({ kind: 'decision', id: 'commit-1' });
 
       const stateChanged = events.find((e) => e.type === 'session.state.changed');
       expect(stateChanged).toBeDefined();

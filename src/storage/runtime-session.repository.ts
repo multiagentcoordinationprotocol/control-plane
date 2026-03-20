@@ -22,6 +22,7 @@ export class RuntimeSessionRepository {
           policyVersion: input.policyVersion,
           initiatorParticipantId: input.initiatorParticipantId,
           sessionState: input.sessionState,
+          expiresAt: input.expiresAt,
           lastSeenAt: input.lastSeenAt,
           metadata: input.metadata,
           updatedAt: new Date().toISOString()

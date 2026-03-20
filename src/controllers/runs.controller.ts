@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
+  HttpCode,
   MessageEvent,
   Param,
   ParseUUIDPipe,
@@ -26,9 +28,9 @@ import { ExecutionRequestDto } from '../dto/execution-request.dto';
 import { ListEventsQueryDto } from '../dto/list-events-query.dto';
 import { ListRunsQueryDto } from '../dto/list-runs-query.dto';
 import { ReplayRequestDto } from '../dto/replay-request.dto';
+import { CloneRunDto } from '../dto/clone-run.dto';
 import { SendSignalDto } from '../dto/send-signal.dto';
 import { StreamRunQueryDto } from '../dto/stream-run-query.dto';
-import { UpdateContextDto } from '../dto/update-context.dto';
 import {
   CanonicalEventDto,
   CreateRunResponseDto,
@@ -66,7 +68,8 @@ export class RunsController {
       limit: query.limit ?? 50,
       offset: query.offset ?? 0,
       sortBy: query.sortBy ?? 'createdAt',
-      sortOrder: query.sortOrder ?? 'desc'
+      sortOrder: query.sortOrder ?? 'desc',
+      includeArchived: query.includeArchived
     });
   }
 
@@ -268,13 +271,32 @@ export class RunsController {
     return this.runExecutor.sendSignal(id, body);
   }
 
-  @Post(':id/context')
-  @ApiOperation({ summary: 'Send a context update to a running session.' })
-  @ApiBody({ type: UpdateContextDto })
-  async updateContext(
+  @Post(':id/clone')
+  @ApiOperation({ summary: 'Clone a run with optional overrides.' })
+  @ApiBody({ type: CloneRunDto })
+  async cloneRun(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: UpdateContextDto
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: CloneRunDto
   ) {
-    return this.runExecutor.updateContext(id, body);
+    const run = await this.runExecutor.clone(id, body);
+    return {
+      runId: run.id,
+      status: run.status,
+      traceId: run.traceId ?? undefined
+    };
   }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Delete a terminal run and all associated data.' })
+  @HttpCode(204)
+  async deleteRun(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.runManager.deleteRun(id);
+  }
+
+  @Post(':id/archive')
+  @ApiOperation({ summary: 'Archive a run, excluding it from default listings.' })
+  async archiveRun(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.runManager.archiveRun(id);
+  }
+
 }

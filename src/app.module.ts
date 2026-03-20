@@ -5,6 +5,8 @@ import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
 import { ThrottleByUserGuard } from './auth/throttle-by-user.guard';
 import { ConfigModule } from './config/config.module';
+import { AdminController } from './controllers/admin.controller';
+import { AuditController } from './controllers/audit.controller';
 import { HealthController } from './controllers/health.controller';
 import { MetricsController } from './controllers/metrics.controller';
 import { ObservabilityController } from './controllers/observability.controller';
@@ -39,6 +41,9 @@ import { RunExecutorService } from './runs/run-executor.service';
 import { RunManagerService } from './runs/run-manager.service';
 import { RunRecoveryService } from './runs/run-recovery.service';
 import { StreamConsumerService } from './runs/stream-consumer.service';
+import { WebhookController } from './controllers/webhook.controller';
+import { WebhookRepository } from './webhooks/webhook.repository';
+import { WebhookService } from './webhooks/webhook.service';
 
 @Module({
   imports: [
@@ -47,7 +52,7 @@ import { StreamConsumerService } from './runs/stream-consumer.service';
     AuthModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])
   ],
-  controllers: [RunsController, RunInsightsController, RuntimeController, ObservabilityController, HealthController, MetricsController],
+  controllers: [RunsController, RunInsightsController, RuntimeController, ObservabilityController, HealthController, MetricsController, AdminController, AuditController, WebhookController],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: ThrottleByUserGuard },
@@ -75,7 +80,9 @@ import { StreamConsumerService } from './runs/stream-consumer.service';
     StreamConsumerService,
     RunExecutorService,
     RunRecoveryService,
-    RunInsightsService
+    RunInsightsService,
+    WebhookRepository,
+    WebhookService
   ]
 })
 export class AppModule implements NestModule {

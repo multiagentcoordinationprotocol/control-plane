@@ -5,7 +5,9 @@ import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
 import { ProjectionService } from '../projection/projection.service';
 import { RunEventService } from '../events/run-event.service';
+import { AuditService } from '../audit/audit.service';
 import { TraceService } from '../telemetry/trace.service';
+import { WebhookService } from '../webhooks/webhook.service';
 import { ExecutionRequest, RunStateProjection } from '../contracts/control-plane';
 
 function makeExecutionRequest(overrides?: Partial<ExecutionRequest>): ExecutionRequest {
@@ -102,6 +104,18 @@ describe('RunManagerService', () => {
           useValue: {
             startRunTrace: jest.fn().mockReturnValue('trace-abc'),
             endRunTrace: jest.fn(),
+          },
+        },
+        {
+          provide: AuditService,
+          useValue: {
+            record: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: WebhookService,
+          useValue: {
+            fireEvent: jest.fn(),
           },
         },
       ],

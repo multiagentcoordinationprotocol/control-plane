@@ -85,6 +85,34 @@ export class RunInsightsService {
     };
   }
 
+  async exportRunJsonl(
+    runId: string,
+    options: { includeCanonical?: boolean; includeRaw?: boolean; eventLimit?: number }
+  ): Promise<string> {
+    const bundle = await this.exportRun(runId, options);
+    const lines: string[] = [];
+
+    lines.push(JSON.stringify({
+      type: 'header',
+      run: bundle.run,
+      session: bundle.session,
+      projection: bundle.projection,
+      metrics: bundle.metrics,
+      artifacts: bundle.artifacts,
+      exportedAt: bundle.exportedAt
+    }));
+
+    for (const event of bundle.canonicalEvents) {
+      lines.push(JSON.stringify({ ...event, type: 'canonical_event' }));
+    }
+
+    for (const event of bundle.rawEvents) {
+      lines.push(JSON.stringify({ ...event, type: 'raw_event' }));
+    }
+
+    return lines.join('\n') + '\n';
+  }
+
   async compareRuns(leftRunId: string, rightRunId: string): Promise<RunComparisonResult> {
     const [leftRun, rightRun] = await Promise.all([
       this.runRepository.findById(leftRunId),
