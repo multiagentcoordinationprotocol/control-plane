@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   MessageEvent,
   Param,
   ParseUUIDPipe,
@@ -18,13 +19,15 @@ import {
   ApiQuery,
   ApiTags
 } from '@nestjs/swagger';
-import { concat, from, map, Observable } from 'rxjs';
-import { ReplayRequest, RunStatus } from '../contracts/control-plane';
+import { map, Observable } from 'rxjs';
+import { CanonicalEvent, ReplayRequest, RunStatus } from '../contracts/control-plane';
+import { AppConfigService } from '../config/app-config.service';
 import { ExecutionRequestDto } from '../dto/execution-request.dto';
 import { ListEventsQueryDto } from '../dto/list-events-query.dto';
 import { ListRunsQueryDto } from '../dto/list-runs-query.dto';
 import { ReplayRequestDto } from '../dto/replay-request.dto';
 import { SendSignalDto } from '../dto/send-signal.dto';
+import { StreamRunQueryDto } from '../dto/stream-run-query.dto';
 import { UpdateContextDto } from '../dto/update-context.dto';
 import {
   CanonicalEventDto,
@@ -32,7 +35,7 @@ import {
   ReplayDescriptorDto,
   RunStateResponseDto
 } from '../dto/run-responses.dto';
-import { StreamHubService } from '../events/stream-hub.service';
+import { StreamHubService, StreamHubMessage } from '../events/stream-hub.service';
 import { ReplayService } from '../replay/replay.service';
 import { EventRepository } from '../storage/event.repository';
 import { RunExecutorService } from '../runs/run-executor.service';
@@ -46,7 +49,8 @@ export class RunsController {
     private readonly runManager: RunManagerService,
     private readonly eventRepository: EventRepository,
     private readonly replayService: ReplayService,
-    private readonly streamHub: StreamHubService
+    private readonly streamHub: StreamHubService,
+    private readonly config: AppConfigService
   ) {}
 
   @Get()
@@ -105,15 +109,103 @@ export class RunsController {
   }
 
   @Sse(':id/stream')
-  @ApiOperation({ summary: 'Subscribe to normalized live run events over SSE.' })
-  streamRun(@Param('id', new ParseUUIDPipe()) id: string): Observable<MessageEvent> {
-    const initial$ = from(this.runManager.getState(id)).pipe(
-      map((state) => ({ type: 'snapshot', data: state }) as MessageEvent)
-    );
-    const live$ = this.streamHub.stream(id).pipe(
-      map((item) => ({ type: item.event, data: item.data }) as MessageEvent)
-    );
-    return concat(initial$, live$);
+  @ApiOperation({ summary: 'Subscribe to normalized live run events over SSE with resume support.' })
+  streamRun(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: StreamRunQueryDto,
+    @Headers('last-event-id') lastEventId?: string
+  ): Observable<MessageEvent> {
+    const afterSeq = query.afterSeq ?? (lastEventId ? Number(lastEventId) : 0);
+    const includeSnapshot = query.includeSnapshot !== false;
+    const heartbeatMs = query.heartbeatMs ?? this.config.streamSseHeartbeatMs;
+
+    return new Observable<MessageEvent>((subscriber) => {
+      const buffer: StreamHubMessage[] = [];
+      let backfillDone = false;
+      let highSeq = afterSeq;
+
+      // 1. Subscribe to live hub immediately, buffer during backfill
+      const liveSub = this.streamHub.stream(id).subscribe({
+        next: (msg) => {
+          if (!backfillDone) {
+            buffer.push(msg);
+            return;
+          }
+          const seq = (msg.data as CanonicalEvent)?.seq;
+          if (seq !== undefined && seq <= highSeq) return;
+          if (seq !== undefined) highSeq = seq;
+          subscriber.next({
+            type: msg.event,
+            data: msg.data,
+            ...(seq !== undefined ? { id: String(seq) } : {})
+          } as MessageEvent);
+        },
+        complete: () => subscriber.complete(),
+        error: (err) => subscriber.error(err)
+      });
+
+      // 2. Heartbeat
+      const heartbeatTimer = setInterval(() => {
+        subscriber.next({ type: 'heartbeat', data: { ts: new Date().toISOString() } } as MessageEvent);
+      }, heartbeatMs);
+      if (typeof heartbeatTimer === 'object' && 'unref' in heartbeatTimer) {
+        heartbeatTimer.unref();
+      }
+
+      // 3. Backfill + drain buffer
+      const runBackfill = async () => {
+        try {
+          // Emit snapshot if requested
+          if (includeSnapshot) {
+            const state = await this.runManager.getState(id);
+            subscriber.next({ type: 'snapshot', data: state } as MessageEvent);
+          }
+
+          // Backfill missed canonical events in batches
+          if (afterSeq > 0) {
+            let cursor = afterSeq;
+            const batchSize = 500;
+            while (true) {
+              const events = await this.eventRepository.listCanonicalByRun(id, cursor, batchSize);
+              for (const event of events) {
+                if (event.seq <= highSeq) continue;
+                highSeq = event.seq;
+                subscriber.next({
+                  type: 'canonical_event',
+                  data: event,
+                  id: String(event.seq)
+                } as MessageEvent);
+              }
+              if (events.length < batchSize) break;
+              cursor = events[events.length - 1].seq;
+            }
+          }
+
+          // Drain buffer, deduplicating by seq
+          backfillDone = true;
+          for (const msg of buffer) {
+            const seq = (msg.data as CanonicalEvent)?.seq;
+            if (seq !== undefined && seq <= highSeq) continue;
+            if (seq !== undefined) highSeq = seq;
+            subscriber.next({
+              type: msg.event,
+              data: msg.data,
+              ...(seq !== undefined ? { id: String(seq) } : {})
+            } as MessageEvent);
+          }
+          buffer.length = 0;
+        } catch (err) {
+          subscriber.error(err);
+        }
+      };
+
+      void runBackfill();
+
+      return () => {
+        clearInterval(heartbeatTimer);
+        liveSub.unsubscribe();
+      };
+    });
   }
 
   @Post(':id/cancel')

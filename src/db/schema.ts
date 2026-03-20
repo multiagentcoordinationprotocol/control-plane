@@ -123,6 +123,7 @@ export const runProjections = pgTable(
     signals: jsonb('signals').$type<Record<string, unknown>>().notNull().default({ signals: [] }),
     timeline: jsonb('timeline').$type<Record<string, unknown>>().notNull().default({ latestSeq: 0, totalEvents: 0, recent: [] }),
     traceSummary: jsonb('trace_summary').$type<Record<string, unknown>>().notNull().default({ spanCount: 0, linkedArtifacts: [] }),
+    progress: jsonb('progress').$type<Record<string, unknown>>().notNull().default({ entries: [] }),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
   },
   (table) => ({

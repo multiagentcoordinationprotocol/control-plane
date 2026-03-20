@@ -124,6 +124,7 @@ export class StreamConsumerService implements OnModuleDestroy {
           if (marker.aborted) return;
           await this.handleRawEvent(params.runId, raw, context, params.runtimeSessionId, marker);
           if (marker.finalized) return;
+          retries = 0;
         }
 
         const snapshot = await provider.getSession({
@@ -221,15 +222,25 @@ export class StreamConsumerService implements OnModuleDestroy {
     timeoutMs: number
   ): AsyncIterable<T> {
     const iterator = iterable[Symbol.asyncIterator]();
-    while (true) {
-      const result = await Promise.race([
-        iterator.next(),
-        new Promise<{ done: true; value: undefined }>((resolve) =>
-          setTimeout(() => resolve({ done: true, value: undefined }), timeoutMs)
-        )
-      ]);
-      if (result.done) return;
-      yield result.value;
+    try {
+      while (true) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const result = await Promise.race([
+            iterator.next(),
+            new Promise<{ done: true; value: undefined }>((resolve) => {
+              timer = setTimeout(() => resolve({ done: true, value: undefined }), timeoutMs);
+              timer.unref();
+            })
+          ]);
+          if (result.done) return;
+          yield result.value;
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+        }
+      }
+    } finally {
+      await iterator.return?.();
     }
   }
 

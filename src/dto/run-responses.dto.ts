@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CanonicalEvent, MetricsSummary, RunStateProjection, RunStatus } from '../contracts/control-plane';
+import { CanonicalEvent, MetricsSummary, RunComparisonResult, RunExportBundle, RunStateProjection, RunStatus } from '../contracts/control-plane';
 
 export class CreateRunResponseDto {
   @ApiProperty()
@@ -137,4 +137,53 @@ export class CanonicalEventDto implements CanonicalEvent {
 
   @ApiProperty({ type: 'object', additionalProperties: true })
   data!: Record<string, unknown>;
+}
+
+export class RunBundleExportDto implements RunExportBundle {
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  run!: RunExportBundle['run'];
+
+  @ApiPropertyOptional({ type: 'object', additionalProperties: true })
+  session!: RunExportBundle['session'];
+
+  @ApiPropertyOptional({ type: 'object', additionalProperties: true })
+  projection!: RunExportBundle['projection'];
+
+  @ApiPropertyOptional({ type: 'object', additionalProperties: true })
+  metrics!: RunExportBundle['metrics'];
+
+  @ApiProperty({ type: 'array', items: { type: 'object', additionalProperties: true } })
+  artifacts!: RunExportBundle['artifacts'];
+
+  @ApiProperty({ type: 'array', items: { type: 'object', additionalProperties: true } })
+  canonicalEvents!: RunExportBundle['canonicalEvents'];
+
+  @ApiProperty({ type: 'array', items: { type: 'object', additionalProperties: true } })
+  rawEvents!: RunExportBundle['rawEvents'];
+
+  @ApiProperty()
+  exportedAt!: string;
+}
+
+export class RunComparisonResultDto implements RunComparisonResult {
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  left!: RunComparisonResult['left'];
+
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  right!: RunComparisonResult['right'];
+
+  @ApiProperty()
+  statusMatch!: boolean;
+
+  @ApiPropertyOptional()
+  durationDeltaMs?: number;
+
+  @ApiPropertyOptional()
+  confidenceDelta?: number;
+
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  participantsDiff!: RunComparisonResult['participantsDiff'];
+
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  signalsDiff!: RunComparisonResult['signalsDiff'];
 }

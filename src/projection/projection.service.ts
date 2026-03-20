@@ -9,7 +9,7 @@ import {
 } from '../contracts/control-plane';
 import { ProjectionRepository } from '../storage/projection.repository';
 
-export const PROJECTION_SCHEMA_VERSION = 2;
+export const PROJECTION_SCHEMA_VERSION = 3;
 
 @Injectable()
 export class ProjectionService {
@@ -26,7 +26,7 @@ export class ProjectionService {
       graph: row.graph as unknown as GraphProjection,
       decision: row.decision as unknown as RunStateProjection['decision'],
       signals: row.signals as unknown as RunStateProjection['signals'],
-      progress: (row as any).progress as unknown as ProgressProjection ?? { entries: [] },
+      progress: row.progress as unknown as ProgressProjection ?? { entries: [] },
       timeline: row.timeline as unknown as RunStateProjection['timeline'],
       trace: row.traceSummary as unknown as RunStateProjection['trace']
     };

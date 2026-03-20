@@ -254,6 +254,39 @@ export interface ReplayRequest {
   toSeq?: number;
 }
 
+export interface RunExportBundle {
+  run: Run;
+  session: Record<string, unknown> | null;
+  projection: RunStateProjection | null;
+  metrics: MetricsSummary | null;
+  artifacts: Artifact[];
+  canonicalEvents: CanonicalEvent[];
+  rawEvents: Record<string, unknown>[];
+  exportedAt: string;
+}
+
+export interface RunComparisonRequest {
+  leftRunId: string;
+  rightRunId: string;
+}
+
+export interface RunComparisonResult {
+  left: { runId: string; status: RunStatus; modeName?: string; durationMs?: number };
+  right: { runId: string; status: RunStatus; modeName?: string; durationMs?: number };
+  statusMatch: boolean;
+  durationDeltaMs?: number;
+  confidenceDelta?: number;
+  participantsDiff: {
+    added: string[];
+    removed: string[];
+    common: string[];
+  };
+  signalsDiff: {
+    added: string[];
+    removed: string[];
+  };
+}
+
 export interface MetricsSummary {
   runId: string;
   eventCount: number;

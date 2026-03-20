@@ -4,6 +4,7 @@ import { RunManagerService } from '../runs/run-manager.service';
 import { EventRepository } from '../storage/event.repository';
 import { ReplayService } from '../replay/replay.service';
 import { StreamHubService } from '../events/stream-hub.service';
+import { AppConfigService } from '../config/app-config.service';
 
 describe('RunsController', () => {
   let controller: RunsController;
@@ -23,6 +24,7 @@ describe('RunsController', () => {
   };
   let mockReplayService: Partial<ReplayService>;
   let mockStreamHub: Partial<StreamHubService>;
+  let mockConfig: Partial<AppConfigService>;
 
   beforeEach(() => {
     mockRunExecutor = {
@@ -41,6 +43,9 @@ describe('RunsController', () => {
     };
     mockReplayService = {};
     mockStreamHub = {};
+    mockConfig = {
+      streamSseHeartbeatMs: 15000,
+    };
 
     controller = new RunsController(
       mockRunExecutor as unknown as RunExecutorService,
@@ -48,6 +53,7 @@ describe('RunsController', () => {
       mockEventRepository as unknown as EventRepository,
       mockReplayService as unknown as ReplayService,
       mockStreamHub as unknown as StreamHubService,
+      mockConfig as unknown as AppConfigService,
     );
   });
 
