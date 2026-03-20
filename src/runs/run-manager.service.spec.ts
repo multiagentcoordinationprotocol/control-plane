@@ -46,6 +46,7 @@ function makeEmptyProjection(runId: string): RunStateProjection {
     graph: { nodes: [], edges: [] },
     decision: {},
     signals: { signals: [] },
+    progress: { entries: [] },
     timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
     trace: { spanCount: 0, linkedArtifacts: [] },
   };
@@ -100,6 +101,7 @@ describe('RunManagerService', () => {
           provide: TraceService,
           useValue: {
             startRunTrace: jest.fn().mockReturnValue('trace-abc'),
+            endRunTrace: jest.fn(),
           },
         },
       ],

@@ -24,6 +24,7 @@ describe('RunEventService', () => {
     graph: { nodes: [], edges: [] },
     decision: {},
     signals: { signals: [] },
+    progress: { entries: [] },
     timeline: { latestSeq: 1, totalEvents: 1, recent: [] },
     trace: { spanCount: 0, linkedArtifacts: [] },
   };

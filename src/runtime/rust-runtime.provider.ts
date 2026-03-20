@@ -25,6 +25,7 @@ import {
   RuntimeStartSessionResult,
   RuntimeStreamSessionRequest
 } from '../contracts/runtime';
+import { CircuitBreaker } from './circuit-breaker';
 import { ProtoRegistryService } from './proto-registry.service';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
 
@@ -37,6 +38,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
   readonly kind = 'rust';
   private readonly logger = new Logger(RustRuntimeProvider.name);
   private client!: any;
+  private circuitBreaker!: CircuitBreaker;
 
   constructor(
     private readonly config: AppConfigService,
@@ -44,7 +46,16 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     private readonly protoRegistry: ProtoRegistryService
   ) {}
 
+  getCircuitBreakerState() {
+    return this.circuitBreaker.getState();
+  }
+
   onModuleInit(): void {
+    this.circuitBreaker = new CircuitBreaker({
+      failureThreshold: this.config.runtimeCircuitBreakerThreshold,
+      resetTimeoutMs: this.config.runtimeCircuitBreakerResetMs
+    });
+
     const repoRoot = path.resolve(__dirname, '..', '..');
     const packageDefinition = protoLoader.loadSync(
       [
@@ -188,30 +199,46 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     const metadata = this.buildMetadata(creds.metadata);
     const streamMethod = this.getClientMethod('StreamSession');
     const call = streamMethod.call(this.client, metadata);
-    const queue: RawRuntimeEvent[] = [
-      {
-        kind: 'stream-status',
-        receivedAt: new Date().toISOString(),
-        streamStatus: { status: 'opened' }
-      }
-    ];
 
+    // Phase 1.6: Event-driven async queue instead of 50ms polling
+    const buffer: RawRuntimeEvent[] = [];
+    let resolve: (() => void) | null = null;
     let ended = false;
     let failure: Error | null = null;
 
+    const notify = () => {
+      if (resolve) {
+        const r = resolve;
+        resolve = null;
+        r();
+      }
+    };
+
+    const waitForItem = (): Promise<void> =>
+      new Promise<void>((r) => {
+        if (buffer.length > 0 || ended) {
+          r();
+        } else {
+          resolve = r;
+        }
+      });
+
     call.on('data', (chunk: any) => {
-      queue.push({
+      buffer.push({
         kind: 'stream-envelope',
         receivedAt: new Date().toISOString(),
         envelope: this.fromEnvelope(chunk.envelope)
       });
+      notify();
     });
     call.on('error', (error: Error) => {
       failure = error;
       ended = true;
+      notify();
     });
     call.on('end', () => {
       ended = true;
+      notify();
     });
 
     const subscriptionEnvelope = this.buildEnvelope({
@@ -225,13 +252,19 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     call.write({ envelope: this.toGrpcEnvelope(subscriptionEnvelope) });
     call.end();
 
-    while (!ended || queue.length > 0) {
-      const item = queue.shift();
-      if (item) {
-        yield item;
-        continue;
+    // Yield the initial stream-opened event
+    yield {
+      kind: 'stream-status',
+      receivedAt: new Date().toISOString(),
+      streamStatus: { status: 'opened' }
+    };
+
+    while (true) {
+      await waitForItem();
+      while (buffer.length > 0) {
+        yield buffer.shift()!;
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (ended && buffer.length === 0) break;
     }
 
     if (failure) {
@@ -321,21 +354,24 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     metadata?: grpc.Metadata,
     opts?: GrpcCallOptions
   ): Promise<any> {
-    const clientMethod = this.getClientMethod(method);
-    const deadline = opts?.deadline ?? new Date(Date.now() + this.config.runtimeRequestTimeoutMs);
-    return new Promise((resolve, reject) => {
-      const callback = (error: grpc.ServiceError | null, response: any) => {
-        if (error) return reject(error);
-        resolve(response);
-      };
-      if (metadata) {
-        clientMethod.call(this.client, request, metadata, { deadline }, callback);
-      } else {
-        clientMethod.call(this.client, request, { deadline }, callback);
-      }
+    return this.circuitBreaker.execute(() => {
+      const clientMethod = this.getClientMethod(method);
+      const deadline = opts?.deadline ?? new Date(Date.now() + this.config.runtimeRequestTimeoutMs);
+      return new Promise((resolve, reject) => {
+        const callback = (error: grpc.ServiceError | null, response: any) => {
+          if (error) return reject(error);
+          resolve(response);
+        };
+        if (metadata) {
+          clientMethod.call(this.client, request, metadata, { deadline }, callback);
+        } else {
+          clientMethod.call(this.client, request, { deadline }, callback);
+        }
+      });
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
   private getClientMethod(method: string): Function {
     const direct = this.client[method];
     if (typeof direct === 'function') return direct;

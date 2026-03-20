@@ -15,7 +15,6 @@ import {
   ApiBody,
   ApiOkResponse,
   ApiOperation,
-  ApiParam,
   ApiQuery,
   ApiTags
 } from '@nestjs/swagger';
@@ -25,6 +24,8 @@ import { ExecutionRequestDto } from '../dto/execution-request.dto';
 import { ListEventsQueryDto } from '../dto/list-events-query.dto';
 import { ListRunsQueryDto } from '../dto/list-runs-query.dto';
 import { ReplayRequestDto } from '../dto/replay-request.dto';
+import { SendSignalDto } from '../dto/send-signal.dto';
+import { UpdateContextDto } from '../dto/update-context.dto';
 import {
   CanonicalEventDto,
   CreateRunResponseDto,
@@ -163,5 +164,25 @@ export class RunsController {
     @Query('seq') seq?: string
   ) {
     return this.replayService.stateAt(id, seq ? Number(seq) : undefined);
+  }
+
+  @Post(':id/signal')
+  @ApiOperation({ summary: 'Send a signal to a running session.' })
+  @ApiBody({ type: SendSignalDto })
+  async sendSignal(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: SendSignalDto
+  ) {
+    return this.runExecutor.sendSignal(id, body);
+  }
+
+  @Post(':id/context')
+  @ApiOperation({ summary: 'Send a context update to a running session.' })
+  @ApiBody({ type: UpdateContextDto })
+  async updateContext(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: UpdateContextDto
+  ) {
+    return this.runExecutor.updateContext(id, body);
   }
 }

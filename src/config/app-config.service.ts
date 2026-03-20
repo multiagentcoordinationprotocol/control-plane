@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 function readBoolean(name: string, defaultValue = false): boolean {
   const raw = process.env[name];
@@ -13,13 +13,27 @@ function readNumber(name: string, defaultValue: number): number {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
+function readStringList(name: string): string[] {
+  const raw = process.env[name];
+  if (!raw) return [];
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
 @Injectable()
-export class AppConfigService {
+export class AppConfigService implements OnModuleInit {
+  private readonly logger = new Logger(AppConfigService.name);
+
+  readonly nodeEnv = process.env.NODE_ENV ?? 'development';
+  readonly isDevelopment = this.nodeEnv === 'development';
+
   readonly port = readNumber('PORT', 3001);
   readonly host = process.env.HOST ?? '0.0.0.0';
   readonly corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
   readonly databaseUrl =
     process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/macp_control_plane';
+
+  // Auth
+  readonly authApiKeys = readStringList('AUTH_API_KEYS');
 
   readonly runtimeKind = process.env.RUNTIME_KIND ?? 'rust';
   readonly runtimeAddress = process.env.RUNTIME_ADDRESS ?? '127.0.0.1:50051';
@@ -33,6 +47,13 @@ export class AppConfigService {
     process.env.RUNTIME_STREAM_SUBSCRIPTION_MESSAGE_TYPE ?? 'SessionWatch';
   readonly runtimeStreamSubscriberId =
     process.env.RUNTIME_STREAM_SUBSCRIBER_ID ?? this.runtimeDevAgentId;
+
+  // Circuit breaker
+  readonly runtimeCircuitBreakerThreshold = readNumber('RUNTIME_CIRCUIT_BREAKER_THRESHOLD', 5);
+  readonly runtimeCircuitBreakerResetMs = readNumber('RUNTIME_CIRCUIT_BREAKER_RESET_MS', 30000);
+
+  // Kickoff retry
+  readonly kickoffMaxRetries = readNumber('KICKOFF_MAX_RETRIES', 3);
 
   readonly streamIdleTimeoutMs = readNumber('STREAM_IDLE_TIMEOUT_MS', 120000);
   readonly streamMaxRetries = readNumber('STREAM_MAX_RETRIES', 5);
@@ -49,4 +70,33 @@ export class AppConfigService {
   readonly otelEnabled = readBoolean('OTEL_ENABLED', false);
   readonly otelServiceName = process.env.OTEL_SERVICE_NAME ?? 'macp-control-plane';
   readonly otelExporterOtlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '';
+
+  onModuleInit(): void {
+    this.validate();
+  }
+
+  private validate(): void {
+    if (this.isDevelopment) return;
+
+    // 1.2: Fail-fast if bearer token missing in production with dev header enabled
+    if (!this.runtimeBearerToken && this.runtimeUseDevHeader) {
+      throw new Error(
+        'RUNTIME_BEARER_TOKEN must be set in production when RUNTIME_USE_DEV_HEADER is enabled'
+      );
+    }
+
+    // 1.2: Fail-fast if TLS is off and insecure is not explicitly allowed
+    if (!this.runtimeTls && !this.runtimeAllowInsecure) {
+      throw new Error(
+        'RUNTIME_TLS must be true in production, or set RUNTIME_ALLOW_INSECURE=true to override'
+      );
+    }
+
+    // 1.2: Warn if OTEL enabled without exporter endpoint
+    if (this.otelEnabled && !this.otelExporterOtlpEndpoint) {
+      this.logger.warn(
+        'OTEL_ENABLED is true but OTEL_EXPORTER_OTLP_ENDPOINT is not set — traces will be discarded'
+      );
+    }
+  }
 }

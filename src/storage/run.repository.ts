@@ -174,6 +174,7 @@ export class RunRepository {
     offset?: number;
     sortBy?: 'createdAt' | 'updatedAt';
     sortOrder?: 'asc' | 'desc';
+    includeSandbox?: boolean;
   }) {
     const conditions: SQL[] = [];
 
@@ -188,6 +189,10 @@ export class RunRepository {
     }
     if (filters.createdBefore) {
       conditions.push(lt(runs.createdAt, filters.createdBefore));
+    }
+    // Phase 3.6: Exclude sandbox runs from default listing
+    if (!filters.includeSandbox) {
+      conditions.push(sql`${runs.mode} != 'sandbox'`);
     }
 
     const sortCol = filters.sortBy === 'updatedAt' ? runs.updatedAt : runs.createdAt;

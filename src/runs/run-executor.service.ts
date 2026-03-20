@@ -4,6 +4,8 @@ import { ArtifactService } from '../artifacts/artifact.service';
 import { AppConfigService } from '../config/app-config.service';
 import { RunEventService } from '../events/run-event.service';
 import { StreamHubService } from '../events/stream-hub.service';
+import { AppException } from '../errors/app-exception';
+import { ErrorCode } from '../errors/error-codes';
 import { ProtoRegistryService } from '../runtime/proto-registry.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
 import { TraceService } from '../telemetry/trace.service';
@@ -60,13 +62,98 @@ export class RunExecutorService {
     return cancelled;
   }
 
+  async sendSignal(runId: string, params: {
+    from: string;
+    to: string[];
+    messageType: string;
+    payload?: Record<string, unknown>;
+  }) {
+    const run = await this.runManager.getRun(runId);
+    if (!run.runtimeSessionId || run.status !== 'running') {
+      throw new BadRequestException('run is not in running state');
+    }
+    const provider = this.runtimeRegistry.get(run.runtimeKind);
+    const session = await this.runtimeSessionRepository.findByRunId(runId);
+
+    const sendResult = await provider.send({
+      runId,
+      runtimeSessionId: run.runtimeSessionId,
+      modeName: (session as any)?.modeName ?? '',
+      from: params.from,
+      to: params.to,
+      messageType: params.messageType,
+      payload: Buffer.from(JSON.stringify(params.payload ?? {}), 'utf8'),
+      payloadDescriptor: params.payload
+    });
+
+    await this.eventService.emitControlPlaneEvents(runId, [
+      {
+        ts: new Date().toISOString(),
+        type: 'message.sent',
+        source: { kind: 'control-plane', name: 'run-executor' },
+        subject: { kind: 'signal', id: sendResult.envelope.messageId },
+        data: {
+          sessionId: run.runtimeSessionId,
+          sender: params.from,
+          to: params.to,
+          messageType: params.messageType,
+          ack: sendResult.ack,
+          payloadDescriptor: params.payload ?? {}
+        }
+      }
+    ]);
+
+    return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
+  }
+
+  async updateContext(runId: string, params: {
+    from: string;
+    context: Record<string, unknown>;
+  }) {
+    const run = await this.runManager.getRun(runId);
+    if (!run.runtimeSessionId || run.status !== 'running') {
+      throw new BadRequestException('run is not in running state');
+    }
+    const provider = this.runtimeRegistry.get(run.runtimeKind);
+    const session = await this.runtimeSessionRepository.findByRunId(runId);
+
+    const sendResult = await provider.send({
+      runId,
+      runtimeSessionId: run.runtimeSessionId,
+      modeName: (session as any)?.modeName ?? '',
+      from: params.from,
+      to: [],
+      messageType: 'ContextUpdate',
+      payload: Buffer.from(JSON.stringify(params.context), 'utf8'),
+      payloadDescriptor: params.context
+    });
+
+    await this.eventService.emitControlPlaneEvents(runId, [
+      {
+        ts: new Date().toISOString(),
+        type: 'message.sent',
+        source: { kind: 'control-plane', name: 'run-executor' },
+        subject: { kind: 'message', id: sendResult.envelope.messageId },
+        data: {
+          sessionId: run.runtimeSessionId,
+          sender: params.from,
+          messageType: 'ContextUpdate',
+          payloadDescriptor: params.context
+        }
+      }
+    ]);
+
+    return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
+  }
+
   private async execute(runId: string, request: ExecutionRequest): Promise<void> {
     const provider = this.runtimeRegistry.get(request.runtime.kind);
     const deadlineMs = this.config.runtimeRequestTimeoutMs;
     try {
       await this.runManager.markStarted(runId, request);
 
-      await this.traceService.withSpan(
+      // Phase 1.4: Mode validation
+      const initResult = await this.traceService.withSpan(
         'runtime.initialize',
         {
           run_id: runId,
@@ -74,12 +161,23 @@ export class RunExecutorService {
           mode_name: request.session.modeName
         },
         async () => {
-          await provider.initialize(
+          return provider.initialize(
             { clientName: 'macp-control-plane', clientVersion: '0.1.0' },
             { deadline: new Date(Date.now() + deadlineMs) }
           );
         }
       );
+
+      if (
+        initResult.supportedModes.length > 0 &&
+        !initResult.supportedModes.includes(request.session.modeName)
+      ) {
+        throw new AppException(
+          ErrorCode.MODE_NOT_SUPPORTED,
+          `Runtime does not support mode '${request.session.modeName}'. Supported: ${initResult.supportedModes.join(', ')}`,
+          400
+        );
+      }
 
       const session = await this.traceService.withSpan(
         'runtime.start_session',
@@ -102,27 +200,30 @@ export class RunExecutorService {
             ? this.protoRegistry.encodePayloadEnvelope(message.payloadEnvelope)
             : Buffer.from(JSON.stringify(message.payload ?? {}), 'utf8');
 
-          const sendResult = await this.traceService.withSpan(
-            'runtime.send_kickoff',
-            {
-              run_id: runId,
-              runtime_kind: request.runtime.kind,
-              mode_name: request.session.modeName,
-              message_type: message.messageType,
-              sender: message.from
-            },
-            async () =>
-              provider.send({
-                runId,
-                runtimeSessionId: session.runtimeSessionId,
-                modeName: request.session.modeName,
-                from: message.from,
-                to: message.to,
-                messageType: message.messageType,
-                payload,
-                payloadDescriptor: (message.payloadEnvelope as unknown as Record<string, unknown>) ?? message.payload,
-                metadata: message.metadata
-              })
+          // Phase 1.5: Kickoff message retry with exponential backoff
+          const sendResult = await this.retryKickoff(() =>
+            this.traceService.withSpan(
+              'runtime.send_kickoff',
+              {
+                run_id: runId,
+                runtime_kind: request.runtime.kind,
+                mode_name: request.session.modeName,
+                message_type: message.messageType,
+                sender: message.from
+              },
+              async () =>
+                provider.send({
+                  runId,
+                  runtimeSessionId: session.runtimeSessionId,
+                  modeName: request.session.modeName,
+                  from: message.from,
+                  to: message.to,
+                  messageType: message.messageType,
+                  payload,
+                  payloadDescriptor: (message.payloadEnvelope as unknown as Record<string, unknown>) ?? message.payload,
+                  metadata: message.metadata
+                })
+            )
           );
 
           await this.eventService.emitControlPlaneEvents(runId, [
@@ -203,5 +304,25 @@ export class RunExecutorService {
     } catch (error) {
       await this.runManager.markFailed(runId, error);
     }
+  }
+
+  private async retryKickoff<T>(fn: () => Promise<T>): Promise<T> {
+    const maxRetries = this.config.kickoffMaxRetries;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries) {
+          const backoffMs = Math.min(250 * 2 ** attempt, 5000);
+          const jitter = Math.random() * backoffMs * 0.2;
+          this.logger.warn(`kickoff attempt ${attempt + 1} failed, retrying in ${Math.round(backoffMs + jitter)}ms`);
+          await new Promise((resolve) => setTimeout(resolve, backoffMs + jitter));
+        }
+      }
+    }
+    throw lastError;
   }
 }

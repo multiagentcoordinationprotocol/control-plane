@@ -16,7 +16,8 @@ const config: Config = {
   },
   collectCoverageFrom: ['**/*.ts', '!**/index.ts', '!main.ts'],
   coverageDirectory: '../coverage',
-  testEnvironment: 'node'
+  testEnvironment: 'node',
+  detectOpenHandles: true
 };
 
 export default config;

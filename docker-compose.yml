@@ -33,8 +33,6 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/macp_control_plane
       RUNTIME_ADDRESS: host.docker.internal:50051
-      RUNTIME_ALLOW_INSECURE: 'true'
-      RUNTIME_USE_DEV_HEADER: 'true'
       NODE_ENV: production
     depends_on:
       postgres:

@@ -147,6 +147,27 @@ export const runArtifacts = pgTable(
   })
 );
 
+export const auditLog = pgTable(
+  'audit_log',
+  {
+    id: uuid('id').primaryKey(),
+    actor: varchar('actor', { length: 255 }).notNull(),
+    actorType: varchar('actor_type', { length: 64 }).notNull(),
+    action: varchar('action', { length: 128 }).notNull(),
+    resource: varchar('resource', { length: 128 }).notNull(),
+    resourceId: varchar('resource_id', { length: 255 }),
+    details: jsonb('details').$type<Record<string, unknown>>().notNull().default({}),
+    requestId: varchar('request_id', { length: 255 }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
+  },
+  (table) => ({
+    actorIdx: index('audit_log_actor_idx').on(table.actor),
+    actionIdx: index('audit_log_action_idx').on(table.action),
+    resourceIdx: index('audit_log_resource_idx').on(table.resource),
+    createdIdx: index('audit_log_created_at_idx').on(table.createdAt)
+  })
+);
+
 export const runMetrics = pgTable(
   'run_metrics',
   {

@@ -12,7 +12,8 @@ async function bootstrap() {
   const config = new AppConfigService();
   await startTelemetry({
     enabled: config.otelEnabled,
-    serviceName: config.otelServiceName
+    serviceName: config.otelServiceName,
+    otlpEndpoint: config.otelExporterOtlpEndpoint || undefined
   });
 
   const app = await NestFactory.create(AppModule, { cors: false });
@@ -27,13 +28,16 @@ async function bootstrap() {
     })
   );
 
-  const swagger = new DocumentBuilder()
-    .setTitle('MACP Control Plane')
-    .setDescription('Scenario-agnostic execution and observability plane for the MACP runtime')
-    .setVersion('0.1.0')
-    .build();
-  const document = SwaggerModule.createDocument(app, swagger);
-  SwaggerModule.setup('docs', app, document);
+  if (config.isDevelopment) {
+    const swagger = new DocumentBuilder()
+      .setTitle('MACP Control Plane')
+      .setDescription('Scenario-agnostic execution and observability plane for the MACP runtime')
+      .setVersion('0.1.0')
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, swagger);
+    SwaggerModule.setup('docs', app, document);
+  }
 
   app.enableShutdownHooks();
 

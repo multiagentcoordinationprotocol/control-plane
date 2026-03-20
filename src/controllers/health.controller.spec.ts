@@ -2,6 +2,7 @@ import { HealthController } from './health.controller';
 import { DatabaseService } from '../db/database.service';
 import { AppConfigService } from '../config/app-config.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
+import { RustRuntimeProvider } from '../runtime/rust-runtime.provider';
 import { StreamConsumerService } from '../runs/stream-consumer.service';
 
 describe('HealthController', () => {
@@ -10,6 +11,7 @@ describe('HealthController', () => {
   let mockDatabase: Partial<DatabaseService>;
   let mockConfig: Partial<AppConfigService>;
   let mockRuntimeRegistry: { get: jest.Mock };
+  let mockRustProvider: { getCircuitBreakerState: jest.Mock };
   let mockStreamConsumer: { isHealthy: jest.Mock };
 
   beforeEach(() => {
@@ -24,6 +26,9 @@ describe('HealthController', () => {
     mockRuntimeRegistry = {
       get: jest.fn()
     };
+    mockRustProvider = {
+      getCircuitBreakerState: jest.fn().mockReturnValue('CLOSED')
+    };
     mockStreamConsumer = {
       isHealthy: jest.fn()
     };
@@ -32,6 +37,7 @@ describe('HealthController', () => {
       mockDatabase as DatabaseService,
       mockConfig as AppConfigService,
       mockRuntimeRegistry as unknown as RuntimeProviderRegistry,
+      mockRustProvider as unknown as RustRuntimeProvider,
       mockStreamConsumer as unknown as StreamConsumerService
     );
   });
@@ -93,7 +99,8 @@ describe('HealthController', () => {
         ok: true,
         database: 'ok',
         runtime: runtimeHealth,
-        streamConsumer: 'ok'
+        streamConsumer: 'ok',
+        circuitBreaker: 'CLOSED'
       });
     });
 

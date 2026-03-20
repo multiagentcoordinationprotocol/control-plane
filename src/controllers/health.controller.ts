@@ -1,17 +1,21 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Public } from '../auth/public.decorator';
 import { DatabaseService } from '../db/database.service';
 import { AppConfigService } from '../config/app-config.service';
 import { RuntimeProviderRegistry } from '../runtime/runtime-provider.registry';
+import { RustRuntimeProvider } from '../runtime/rust-runtime.provider';
 import { StreamConsumerService } from '../runs/stream-consumer.service';
 
 @ApiTags('health')
 @Controller()
+@Public()
 export class HealthController {
   constructor(
     private readonly database: DatabaseService,
     private readonly config: AppConfigService,
     private readonly runtimeRegistry: RuntimeProviderRegistry,
+    private readonly rustRuntimeProvider: RustRuntimeProvider,
     private readonly streamConsumer: StreamConsumerService
   ) {}
 
@@ -48,11 +52,14 @@ export class HealthController {
 
     const streamHealthy = this.streamConsumer.isHealthy();
 
+    const circuitBreaker = this.rustRuntimeProvider.getCircuitBreakerState();
+
     return {
-      ok: dbOk && runtime.ok && streamHealthy,
+      ok: dbOk && runtime.ok && streamHealthy && circuitBreaker !== 'OPEN',
       database: dbOk ? 'ok' : 'unhealthy',
       runtime,
-      streamConsumer: streamHealthy ? 'ok' : 'unhealthy'
+      streamConsumer: streamHealthy ? 'ok' : 'unhealthy',
+      circuitBreaker
     };
   }
 }

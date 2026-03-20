@@ -120,9 +120,11 @@ export type CanonicalEventType =
   | 'proposal.updated'
   | 'decision.proposed'
   | 'decision.finalized'
+  | 'progress.reported'
   | 'tool.called'
   | 'tool.completed'
-  | 'artifact.created';
+  | 'artifact.created'
+  | 'message.send_failed';
 
 export interface CanonicalEvent {
   id: string;
@@ -130,6 +132,7 @@ export interface CanonicalEvent {
   seq: number;
   ts: string;
   type: CanonicalEventType | string;
+  schemaVersion?: number;
   subject?: {
     kind:
       | 'run'
@@ -224,12 +227,22 @@ export interface TraceSummary {
   linkedArtifacts: string[];
 }
 
+export interface ProgressProjection {
+  entries: Array<{
+    participantId: string;
+    percentage?: number;
+    message?: string;
+    ts: string;
+  }>;
+}
+
 export interface RunStateProjection {
   run: RunSummaryProjection;
   participants: ParticipantProjection[];
   graph: GraphProjection;
   decision: DecisionProjection;
   signals: SignalProjection;
+  progress: ProgressProjection;
   timeline: TimelineProjection;
   trace: TraceSummary;
 }

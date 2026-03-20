@@ -63,6 +63,9 @@ export class RunStateResponseDto implements RunStateProjection {
   signals!: RunStateProjection['signals'];
 
   @ApiProperty({ type: 'object', additionalProperties: true })
+  progress!: RunStateProjection['progress'];
+
+  @ApiProperty({ type: 'object', additionalProperties: true })
   timeline!: RunStateProjection['timeline'];
 
   @ApiProperty({ type: 'object', additionalProperties: true })

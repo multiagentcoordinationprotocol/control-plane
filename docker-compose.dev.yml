@@ -1,0 +1,9 @@
+version: '3.8'
+
+# Development overrides — use: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+services:
+  control-plane:
+    environment:
+      NODE_ENV: development
+      RUNTIME_ALLOW_INSECURE: 'true'
+      RUNTIME_USE_DEV_HEADER: 'true'

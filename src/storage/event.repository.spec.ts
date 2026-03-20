@@ -47,9 +47,6 @@ describe('EventRepository', () => {
         receivedAt: '2026-01-01T00:00:00Z'
       };
 
-      // values() must resolve directly for appendRaw (no onConflictDoNothing)
-      mockDb._insert.values.mockResolvedValue(undefined);
-
       await repo.appendRaw('run-1', 1, raw);
 
       expect(mockDb.insert).toHaveBeenCalled();
@@ -65,7 +62,8 @@ describe('EventRepository', () => {
     });
 
     it('uses provided transaction when tx is given', async () => {
-      const txInsertValues = jest.fn().mockResolvedValue(undefined);
+      const txOnConflict = jest.fn().mockResolvedValue(undefined);
+      const txInsertValues = jest.fn().mockReturnValue({ onConflictDoNothing: txOnConflict });
       const txInsert = jest.fn().mockReturnValue({ values: txInsertValues });
       const tx = { insert: txInsert } as any;
 

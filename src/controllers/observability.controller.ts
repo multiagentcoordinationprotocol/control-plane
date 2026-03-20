@@ -6,6 +6,7 @@ import { MetricsSummaryDto } from '../dto/run-responses.dto';
 import { RunEventService } from '../events/run-event.service';
 import { MetricsService } from '../metrics/metrics.service';
 import { ProjectionService } from '../projection/projection.service';
+import { EventRepository } from '../storage/event.repository';
 import { RunManagerService } from '../runs/run-manager.service';
 
 @ApiTags('observability')
@@ -16,7 +17,8 @@ export class ObservabilityController {
     private readonly artifactService: ArtifactService,
     private readonly metricsService: MetricsService,
     private readonly projectionService: ProjectionService,
-    private readonly eventService: RunEventService
+    private readonly eventService: RunEventService,
+    private readonly eventRepository: EventRepository
   ) {}
 
   @Get('runs/:id/traces')
@@ -82,5 +84,14 @@ export class ObservabilityController {
       decisionCount: 0,
       streamReconnectCount: 0
     };
+  }
+
+  @Post('runs/:id/projection/rebuild')
+  @ApiOperation({ summary: 'Rebuild the projection for a run from canonical events.' })
+  async rebuildProjection(@Param('id', new ParseUUIDPipe()) id: string) {
+    await this.runManager.getRun(id);
+    const events = await this.eventRepository.listCanonicalUpTo(id);
+    const projection = await this.projectionService.rebuild(id, events as any);
+    return { rebuilt: true, latestSeq: projection.timeline.latestSeq };
   }
 }

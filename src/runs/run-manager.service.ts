@@ -31,6 +31,12 @@ export class RunManagerService {
       execution_mode: request.mode
     });
 
+    // Phase 3.6: Auto-tag sandbox runs
+    const tags = [...(request.execution?.tags ?? [])];
+    if (request.mode === 'sandbox' && !tags.includes('sandbox')) {
+      tags.push('sandbox');
+    }
+
     const record = await this.runRepository.create({
       id: runId,
       status: 'queued',
@@ -38,7 +44,7 @@ export class RunManagerService {
       runtimeKind: request.runtime.kind,
       runtimeVersion: request.runtime.version,
       idempotencyKey,
-      tags: request.execution?.tags ?? [],
+      tags,
       sourceKind: request.session.metadata?.source as string | undefined,
       sourceRef: request.session.metadata?.sourceRef as string | undefined,
       metadata: {
@@ -173,6 +179,7 @@ export class RunManagerService {
     const current = await this.getRun(runId);
     if (current.status === 'completed') return current;
     const run = await this.runRepository.markCompleted(runId);
+    this.traceService.endRunTrace(runId, 'completed');
     await this.runEventService.emitControlPlaneEvents(runId, [
       {
         ts: new Date().toISOString(),
@@ -195,6 +202,7 @@ export class RunManagerService {
     const current = await this.getRun(runId);
     if (current.status === 'cancelled') return current;
     const run = await this.runRepository.markCancelled(runId);
+    this.traceService.endRunTrace(runId, 'cancelled');
     await this.runEventService.emitControlPlaneEvents(runId, [
       {
         ts: new Date().toISOString(),
@@ -218,6 +226,7 @@ export class RunManagerService {
     if (current.status === 'failed') return current;
     const message = error instanceof Error ? error.message : String(error);
     const run = await this.runRepository.markFailed(runId, 'RUN_FAILED', message);
+    this.traceService.endRunTrace(runId, 'failed', message);
     await this.runEventService.emitControlPlaneEvents(runId, [
       {
         ts: new Date().toISOString(),

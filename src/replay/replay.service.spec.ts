@@ -230,6 +230,7 @@ describe('ReplayService', () => {
         graph: { nodes: [], edges: [] },
         decision: {},
         signals: { signals: [] },
+        progress: { entries: [] },
         timeline: { latestSeq: 2, totalEvents: 2, recent: [] },
         trace: { spanCount: 0, linkedArtifacts: [] },
       };

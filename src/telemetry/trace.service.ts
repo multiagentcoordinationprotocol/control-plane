@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { SpanStatusCode, context, trace } from '@opentelemetry/api';
+import { Span, SpanStatusCode, context, trace } from '@opentelemetry/api';
 
 @Injectable()
 export class TraceService {
   private readonly tracer = trace.getTracer('macp-control-plane');
+  private readonly runSpans = new Map<string, Span>();
 
   async withSpan<T>(
     name: string,
@@ -26,14 +27,30 @@ export class TraceService {
     }
   }
 
-  startRunTrace(runId: string, attributes: Record<string, string | number | boolean | undefined>) {
+  startRunTrace(runId: string, attributes: Record<string, string | number | boolean | undefined>): string {
     const span = this.tracer.startSpan('run.lifecycle');
     span.setAttribute('run_id', runId);
     Object.entries(attributes).forEach(([key, value]) => {
       if (value !== undefined) span.setAttribute(key, value);
     });
     const traceId = span.spanContext().traceId;
-    span.end();
+    // Keep span alive — end it when run reaches terminal state
+    this.runSpans.set(runId, span);
     return traceId;
+  }
+
+  endRunTrace(runId: string, status: 'completed' | 'failed' | 'cancelled', error?: string): void {
+    const span = this.runSpans.get(runId);
+    if (!span) return;
+    this.runSpans.delete(runId);
+
+    span.setAttribute('run.terminal_status', status);
+    if (status === 'failed') {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error ?? 'run failed' });
+      if (error) span.recordException(new Error(error));
+    } else {
+      span.setStatus({ code: SpanStatusCode.OK });
+    }
+    span.end();
   }
 }

@@ -3,10 +3,13 @@ import {
   CanonicalEvent,
   GraphProjection,
   ParticipantProjection,
+  ProgressProjection,
   RunStateProjection,
   RunSummaryProjection
 } from '../contracts/control-plane';
 import { ProjectionRepository } from '../storage/projection.repository';
+
+export const PROJECTION_SCHEMA_VERSION = 2;
 
 @Injectable()
 export class ProjectionService {
@@ -23,6 +26,7 @@ export class ProjectionService {
       graph: row.graph as unknown as GraphProjection,
       decision: row.decision as unknown as RunStateProjection['decision'],
       signals: row.signals as unknown as RunStateProjection['signals'],
+      progress: (row as any).progress as unknown as ProgressProjection ?? { entries: [] },
       timeline: row.timeline as unknown as RunStateProjection['timeline'],
       trace: row.traceSummary as unknown as RunStateProjection['trace']
     };
@@ -152,6 +156,19 @@ export class ProjectionService {
           next.run.status = 'completed';
           break;
         }
+        case 'progress.reported': {
+          const progressPayload = event.data.decodedPayload as Record<string, unknown> | undefined;
+          next.progress.entries = [
+            ...next.progress.entries,
+            {
+              participantId: String(event.data.sender ?? ''),
+              percentage: safeOptionalNumber(progressPayload?.percentage ?? progressPayload?.progress),
+              message: String(progressPayload?.message ?? progressPayload?.status ?? ''),
+              ts: event.ts
+            }
+          ].slice(-100);
+          break;
+        }
         case 'artifact.created': {
           const artifactId = String(event.subject?.id ?? event.id);
           next.trace.linkedArtifacts = [...new Set([...next.trace.linkedArtifacts, artifactId])];
@@ -169,6 +186,14 @@ export class ProjectionService {
     return this.applyEvents(this.empty(runId), events);
   }
 
+  async rebuild(runId: string, events: CanonicalEvent[]): Promise<RunStateProjection> {
+    const projection = this.applyEvents(this.empty(runId), events);
+    const version = events.at(-1)?.seq ?? 0;
+    await this.projectionRepository.upsert(runId, projection, version);
+    this.logger.log(`projection rebuilt for run ${runId} at schema version ${PROJECTION_SCHEMA_VERSION}`);
+    return projection;
+  }
+
   empty(runId: string): RunStateProjection {
     return {
       run: { runId, status: 'queued' },
@@ -176,6 +201,7 @@ export class ProjectionService {
       graph: { nodes: [], edges: [] },
       decision: {},
       signals: { signals: [] },
+      progress: { entries: [] },
       timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
       trace: { spanCount: 0, linkedArtifacts: [] }
     };

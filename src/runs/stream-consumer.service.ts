@@ -43,9 +43,14 @@ export class StreamConsumerService implements OnModuleDestroy {
     runtimeKind: string;
     runtimeSessionId: string;
     subscriberId: string;
+    resumeFromSeq?: number;
   }): Promise<void> {
     if (this.active.has(params.runId)) return;
-    const marker: ActiveStream = { aborted: false, finalized: false, lastProcessedSeq: 0 };
+    const marker: ActiveStream = {
+      aborted: false,
+      finalized: false,
+      lastProcessedSeq: params.resumeFromSeq ?? 0
+    };
     this.active.set(params.runId, marker);
     void this.consumeLoop(marker, params).finally(() => {
       this.active.delete(params.runId);

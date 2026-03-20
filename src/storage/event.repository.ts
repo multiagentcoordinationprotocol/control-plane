@@ -24,7 +24,7 @@ export class EventRepository {
       kind: raw.kind,
       sourceName: 'rust-runtime',
       payload: this.serializeRaw(raw)
-    });
+    }).onConflictDoNothing();
   }
 
   async appendCanonical(events: CanonicalEvent[], tx?: Tx) {

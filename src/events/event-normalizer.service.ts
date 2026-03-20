@@ -44,6 +44,26 @@ export class EventNormalizerService implements EventNormalizer {
       ];
     }
 
+    if (rawEvent.kind === 'send-ack' && rawEvent.ack) {
+      return [
+        this.makeEvent(
+          runId,
+          ts,
+          'message.sent',
+          { kind: 'message', id: rawEvent.ack.messageId },
+          {
+            messageId: rawEvent.ack.messageId,
+            sessionId: rawEvent.ack.sessionId,
+            ok: rawEvent.ack.ok,
+            duplicate: rawEvent.ack.duplicate,
+            sessionState: rawEvent.ack.sessionState,
+            acceptedAtUnixMs: rawEvent.ack.acceptedAtUnixMs
+          },
+          'send-ack'
+        )
+      ];
+    }
+
     if (rawEvent.kind !== 'stream-envelope' || !rawEvent.envelope) {
       return [];
     }
@@ -159,6 +179,7 @@ export class EventNormalizerService implements EventNormalizer {
       return 'proposal.updated';
     }
 
+    if (messageType === 'Progress') return 'progress.reported';
     if (/^Tool(Call|Request)$/i.test(messageType)) return 'tool.called';
     if (/^Tool(Result|Completed|Output)$/i.test(messageType)) return 'tool.completed';
     return null;
@@ -177,6 +198,8 @@ export class EventNormalizerService implements EventNormalizer {
       case 'tool.called':
       case 'tool.completed':
         return { kind: 'tool', id: envelope.messageId };
+      case 'progress.reported':
+        return { kind: 'message', id: envelope.messageId };
       default:
         return { kind: 'message', id: envelope.messageId };
     }
@@ -196,6 +219,7 @@ export class EventNormalizerService implements EventNormalizer {
       seq: 0,
       ts,
       type,
+      schemaVersion: 1,
       subject,
       source: {
         kind: 'runtime',

@@ -55,6 +55,7 @@ describe('ProjectionService', () => {
         graph: { nodes: [], edges: [] },
         decision: {},
         signals: { signals: [] },
+        progress: { entries: [] },
         timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
         trace: { spanCount: 0, linkedArtifacts: [] },
       });

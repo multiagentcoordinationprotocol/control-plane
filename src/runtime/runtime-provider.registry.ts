@@ -4,16 +4,25 @@ import { RustRuntimeProvider } from './rust-runtime.provider';
 
 @Injectable()
 export class RuntimeProviderRegistry {
-  constructor(private readonly rustProvider: RustRuntimeProvider) {}
+  private readonly providers = new Map<string, RuntimeProvider>();
+
+  constructor(private readonly rustProvider: RustRuntimeProvider) {
+    this.register(rustProvider);
+  }
+
+  register(provider: RuntimeProvider): void {
+    this.providers.set(provider.kind, provider);
+  }
 
   get(kind: string): RuntimeProvider {
-    const providers: Record<string, RuntimeProvider> = {
-      rust: this.rustProvider
-    };
-    const provider = providers[kind];
+    const provider = this.providers.get(kind);
     if (!provider) {
       throw new NotFoundException(`runtime provider '${kind}' is not registered`);
     }
     return provider;
+  }
+
+  listKinds(): string[] {
+    return Array.from(this.providers.keys());
   }
 }

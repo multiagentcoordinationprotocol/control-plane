@@ -262,7 +262,7 @@ describe('EventNormalizerService', () => {
   });
 
   describe('unknown event kinds', () => {
-    it('should return empty array for unknown envelope kind', () => {
+    it('should produce message.sent for send-ack kind', () => {
       const raw: RawRuntimeEvent = {
         kind: 'send-ack',
         receivedAt: '2026-01-01T00:00:00.000Z',
@@ -279,7 +279,9 @@ describe('EventNormalizerService', () => {
 
       const events = service.normalize('run-1', raw, ctx);
 
-      expect(events).toHaveLength(0);
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('message.sent');
+      expect(events[0].data.messageId).toBe('msg-1');
     });
 
     it('should return empty array for stream-envelope without envelope data', () => {
