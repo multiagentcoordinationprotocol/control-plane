@@ -102,7 +102,8 @@ export class RunManagerService {
   async bindSession(
     runId: string,
     request: ExecutionRequest,
-    session: { runtimeSessionId: string; initiator: string; ack: { sessionState: string } }
+    session: { runtimeSessionId: string; initiator: string; ack: { sessionState: string } },
+    capabilities?: Record<string, unknown>
   ) {
     const run = await this.runRepository.update(runId, {
       status: 'binding_session',
@@ -119,6 +120,7 @@ export class RunManagerService {
       initiatorParticipantId: session.initiator,
       sessionState: session.ack.sessionState,
       lastSeenAt: new Date().toISOString(),
+      capabilities: (capabilities ?? {}) as Record<string, unknown>,
       metadata: {
         participants: request.session.participants,
         roots: request.session.roots ?? []

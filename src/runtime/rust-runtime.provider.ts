@@ -118,7 +118,15 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         description: response.runtimeInfo?.description,
         websiteUrl: response.runtimeInfo?.websiteUrl
       },
-      supportedModes: response.supportedModes ?? []
+      supportedModes: response.supportedModes ?? [],
+      capabilities: response.capabilities ? {
+        sessions: response.capabilities.sessions,
+        cancellation: response.capabilities.cancellation,
+        progress: response.capabilities.progress,
+        manifest: response.capabilities.manifest,
+        modeRegistry: response.capabilities.modeRegistry,
+        roots: response.capabilities.roots
+      } : undefined
     };
   }
 

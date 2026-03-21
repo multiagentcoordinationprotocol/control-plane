@@ -45,7 +45,8 @@ export class EventRepository {
         traceId: event.trace?.traceId,
         spanId: event.trace?.spanId,
         parentSpanId: event.trace?.parentSpanId,
-        data: event.data
+        data: event.data,
+        schemaVersion: event.schemaVersion ?? 3
       }))
     ).onConflictDoNothing();
   }
@@ -81,6 +82,24 @@ export class EventRepository {
       .where(and(eq(runEventsRaw.runId, runId), gt(runEventsRaw.seq, afterSeq)))
       .orderBy(asc(runEventsRaw.seq))
       .limit(limit);
+  }
+
+  async *streamCanonicalByRun(runId: string, afterSeq = 0, batchSize = 500): AsyncGenerator<typeof runEventsCanonical.$inferSelect> {
+    let cursor = afterSeq;
+    while (true) {
+      const batch = await this.database.db
+        .select()
+        .from(runEventsCanonical)
+        .where(and(eq(runEventsCanonical.runId, runId), gt(runEventsCanonical.seq, cursor)))
+        .orderBy(asc(runEventsCanonical.seq))
+        .limit(batchSize);
+      if (batch.length === 0) return;
+      for (const event of batch) {
+        yield event;
+      }
+      cursor = batch[batch.length - 1].seq;
+      if (batch.length < batchSize) return;
+    }
   }
 
   async listCanonicalUpTo(runId: string, seq?: number) {

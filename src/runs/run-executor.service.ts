@@ -33,6 +33,67 @@ export class RunExecutorService {
     private readonly config: AppConfigService
   ) {}
 
+  async validate(request: ExecutionRequest) {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (!request.session.participants || request.session.participants.length === 0) {
+      errors.push('session.participants must contain at least one participant');
+    }
+
+    if (!request.session.modeName) {
+      errors.push('session.modeName is required');
+    }
+
+    if (request.kickoff) {
+      for (const msg of request.kickoff) {
+        if (!msg.messageType) {
+          errors.push('kickoff message is missing messageType');
+        }
+        if (!msg.from) {
+          errors.push('kickoff message is missing from');
+        }
+      }
+    }
+
+    let runtimeInfo: { reachable: boolean; supportedModes: string[]; capabilities?: unknown } = {
+      reachable: false,
+      supportedModes: []
+    };
+
+    try {
+      const provider = this.runtimeRegistry.get(request.runtime.kind);
+      const deadlineMs = this.config.runtimeRequestTimeoutMs;
+      const initResult = await provider.initialize(
+        { clientName: 'macp-control-plane', clientVersion: this.config.clientVersion },
+        { deadline: new Date(Date.now() + deadlineMs) }
+      );
+      runtimeInfo = {
+        reachable: true,
+        supportedModes: initResult.supportedModes,
+        capabilities: initResult.capabilities
+      };
+
+      if (
+        initResult.supportedModes.length > 0 &&
+        !initResult.supportedModes.includes(request.session.modeName)
+      ) {
+        errors.push(
+          `Runtime does not support mode '${request.session.modeName}'. Supported: ${initResult.supportedModes.join(', ')}`
+        );
+      }
+    } catch (error) {
+      warnings.push(`Runtime not reachable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors,
+      warnings,
+      runtime: runtimeInfo
+    };
+  }
+
   async launch(request: ExecutionRequest) {
     if (request.mode === 'replay') {
       throw new BadRequestException('Use /runs/:id/replay for replay mode. POST /runs launches live or sandbox executions.');
@@ -116,6 +177,52 @@ export class RunExecutorService {
     return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
   }
 
+  async updateContext(runId: string, dto: { from: string; context: Record<string, unknown> }) {
+    const run = await this.runManager.getRun(runId);
+    if (!run.runtimeSessionId || run.status !== 'running') {
+      throw new BadRequestException('run is not in running state');
+    }
+    const provider = this.runtimeRegistry.get(run.runtimeKind);
+
+    const sendResult = await provider.send({
+      runId,
+      runtimeSessionId: '',
+      modeName: '',
+      from: dto.from,
+      to: [],
+      messageType: 'ContextUpdate',
+      payload: Buffer.from(JSON.stringify(dto.context), 'utf8'),
+      payloadDescriptor: dto.context
+    });
+
+    if (!sendResult.ack.ok && sendResult.ack.error) {
+      throw new AppException(
+        ErrorCode.CONTEXT_UPDATE_FAILED,
+        `Runtime rejected context update: [${sendResult.ack.error.code}] ${sendResult.ack.error.message}`,
+        502
+      );
+    }
+
+    await this.eventService.emitControlPlaneEvents(runId, [
+      {
+        ts: new Date().toISOString(),
+        type: 'message.sent',
+        source: { kind: 'control-plane', name: 'run-executor' },
+        subject: { kind: 'message', id: sendResult.envelope.messageId },
+        data: {
+          sessionId: run.runtimeSessionId,
+          sender: dto.from,
+          to: [],
+          messageType: 'ContextUpdate',
+          ack: sendResult.ack,
+          payloadDescriptor: dto.context
+        }
+      }
+    ]);
+
+    return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
+  }
+
   async clone(runId: string, overrides?: { tags?: string[]; context?: Record<string, unknown> }) {
     const run = await this.runManager.getRun(runId);
     const executionRequest = run.metadata?.executionRequest as ExecutionRequest | undefined;
@@ -154,7 +261,7 @@ export class RunExecutorService {
         },
         async () => {
           return provider.initialize(
-            { clientName: 'macp-control-plane', clientVersion: '0.2.0' },
+            { clientName: 'macp-control-plane', clientVersion: this.config.clientVersion },
             { deadline: new Date(Date.now() + deadlineMs) }
           );
         }
@@ -185,7 +292,7 @@ export class RunExecutorService {
         async () => handle.sessionAck
       );
 
-      await this.runManager.bindSession(runId, request, session);
+      await this.runManager.bindSession(runId, request, session, initResult.capabilities as unknown as Record<string, unknown>);
 
       // Send kickoff messages through the bidirectional stream
       for (const message of request.kickoff ?? []) {

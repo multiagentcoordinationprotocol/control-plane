@@ -202,6 +202,13 @@ describe('AppConfigService', () => {
     });
   });
 
+  describe('clientVersion', () => {
+    it('should read version from package.json', () => {
+      const config = new AppConfigService();
+      expect(config.clientVersion).toBe('0.3.0');
+    });
+  });
+
   describe('readNumber edge cases', () => {
     it('should handle a valid number string for STREAM_BACKOFF_BASE_MS', () => {
       process.env.STREAM_BACKOFF_BASE_MS = '500';

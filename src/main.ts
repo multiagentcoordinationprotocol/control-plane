@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import * as express from 'express';
@@ -52,6 +52,9 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err) => {
-  console.error('bootstrap failed', err);
+  new Logger('Bootstrap').error(
+    `bootstrap failed: ${err instanceof Error ? err.message : String(err)}`,
+    err instanceof Error ? err.stack : undefined
+  );
   process.exit(1);
 });

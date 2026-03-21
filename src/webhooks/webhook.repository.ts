@@ -15,7 +15,7 @@ export class WebhookRepository {
       url: input.url,
       events: input.events,
       secret: input.secret,
-      active: 1,
+      active: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     });
@@ -28,7 +28,7 @@ export class WebhookRepository {
   }
 
   async listActive() {
-    return this.database.db.select().from(webhooks).where(eq(webhooks.active, 1));
+    return this.database.db.select().from(webhooks).where(eq(webhooks.active, true));
   }
 
   async list() {

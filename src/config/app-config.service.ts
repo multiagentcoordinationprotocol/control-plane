@@ -26,6 +26,16 @@ export class AppConfigService implements OnModuleInit {
   readonly nodeEnv = process.env.NODE_ENV ?? 'development';
   readonly isDevelopment = this.nodeEnv === 'development';
 
+  /** Read from package.json at startup */
+  readonly clientVersion: string = (() => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      return require('../../package.json').version as string;
+    } catch {
+      return '0.0.0';
+    }
+  })();
+
   readonly port = readNumber('PORT', 3001);
   readonly host = process.env.HOST ?? '0.0.0.0';
   readonly corsOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
@@ -67,6 +77,9 @@ export class AppConfigService implements OnModuleInit {
   readonly dbPoolMax = readNumber('DB_POOL_MAX', 20);
   readonly dbPoolIdleTimeout = readNumber('DB_POOL_IDLE_TIMEOUT', 30000);
   readonly dbPoolConnectionTimeout = readNumber('DB_POOL_CONNECTION_TIMEOUT', 5000);
+
+  readonly streamHubStrategy = process.env.STREAM_HUB_STRATEGY ?? 'memory';
+  readonly redisUrl = process.env.REDIS_URL ?? '';
 
   readonly logLevel = process.env.LOG_LEVEL ?? 'info';
   readonly otelEnabled = readBoolean('OTEL_ENABLED', false);

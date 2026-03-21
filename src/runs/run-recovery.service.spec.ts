@@ -1,5 +1,6 @@
 import { RunRecoveryService } from './run-recovery.service';
 import { AppConfigService } from '../config/app-config.service';
+import { DatabaseService } from '../db/database.service';
 import { RunEventService } from '../events/run-event.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
@@ -9,6 +10,7 @@ import { StreamConsumerService } from './stream-consumer.service';
 describe('RunRecoveryService', () => {
   let service: RunRecoveryService;
   let mockConfig: Partial<AppConfigService>;
+  let mockDatabase: { tryAdvisoryLock: jest.Mock; advisoryUnlock: jest.Mock };
   let mockRunRepo: { listActiveRuns: jest.Mock };
   let mockSessionRepo: { findByRunId: jest.Mock };
   let mockRunManager: { markRunning: jest.Mock; markFailed: jest.Mock };
@@ -17,6 +19,10 @@ describe('RunRecoveryService', () => {
 
   beforeEach(() => {
     mockConfig = { runRecoveryEnabled: true };
+    mockDatabase = {
+      tryAdvisoryLock: jest.fn().mockResolvedValue(true),
+      advisoryUnlock: jest.fn().mockResolvedValue(undefined)
+    };
     mockRunRepo = { listActiveRuns: jest.fn().mockResolvedValue([]) };
     mockSessionRepo = { findByRunId: jest.fn().mockResolvedValue(null) };
     mockRunManager = {
@@ -28,6 +34,7 @@ describe('RunRecoveryService', () => {
 
     service = new RunRecoveryService(
       mockConfig as AppConfigService,
+      mockDatabase as unknown as DatabaseService,
       mockRunRepo as unknown as RunRepository,
       mockSessionRepo as unknown as RuntimeSessionRepository,
       mockRunManager as unknown as RunManagerService,
@@ -39,6 +46,7 @@ describe('RunRecoveryService', () => {
   it('skips recovery when disabled', async () => {
     const disabledService = new RunRecoveryService(
       { runRecoveryEnabled: false } as AppConfigService,
+      mockDatabase as unknown as DatabaseService,
       mockRunRepo as unknown as RunRepository,
       mockSessionRepo as unknown as RuntimeSessionRepository,
       mockRunManager as unknown as RunManagerService,

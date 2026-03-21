@@ -21,4 +21,14 @@ export class SendSignalDto {
   @IsOptional()
   @IsObject()
   payload?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Signal type classification (e.g., anomaly, alert)' })
+  @IsOptional()
+  @IsString()
+  signalType?: string;
+
+  @ApiPropertyOptional({ description: 'Signal severity (e.g., low, medium, high, critical)' })
+  @IsOptional()
+  @IsString()
+  severity?: string;
 }

@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { RunRepository } from './run.repository';
 import { DatabaseService } from '../db/database.service';
 
@@ -117,9 +117,10 @@ describe('RunRepository', () => {
 
   // ------ findByIdOrThrow ------
   describe('findByIdOrThrow', () => {
-    it('throws when the run is not found', async () => {
+    it('throws NotFoundException when the run is not found', async () => {
       mockDb._select.limit.mockResolvedValue([]);
 
+      await expect(repo.findByIdOrThrow('missing-id')).rejects.toThrow(NotFoundException);
       await expect(repo.findByIdOrThrow('missing-id')).rejects.toThrow(
         'run missing-id not found'
       );

@@ -64,6 +64,7 @@ export interface RuntimeInitializeResult {
     websiteUrl?: string;
   };
   supportedModes: string[];
+  capabilities?: RuntimeCapabilities;
 }
 
 export interface RuntimeStartSessionRequest {

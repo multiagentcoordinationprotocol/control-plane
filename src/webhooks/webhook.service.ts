@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createHmac } from 'node:crypto';
+import { WebhookDeliveryRepository } from './webhook-delivery.repository';
 import { WebhookRepository } from './webhook.repository';
 
 export interface WebhookPayload {
@@ -14,7 +15,10 @@ export interface WebhookPayload {
 export class WebhookService {
   private readonly logger = new Logger(WebhookService.name);
 
-  constructor(private readonly webhookRepository: WebhookRepository) {}
+  constructor(
+    private readonly webhookRepository: WebhookRepository,
+    private readonly deliveryRepository: WebhookDeliveryRepository
+  ) {}
 
   async register(input: { url: string; events: string[]; secret: string }) {
     return this.webhookRepository.create(input);
@@ -35,38 +39,75 @@ export class WebhookService {
     );
 
     for (const webhook of matching) {
-      void this.deliver(webhook.url, webhook.secret, payload);
+      // Outbox pattern: insert delivery record first, then attempt delivery
+      const delivery = await this.deliveryRepository.create({
+        webhookId: webhook.id,
+        event: payload.event,
+        runId: payload.runId,
+        payload: payload as unknown as Record<string, unknown>
+      });
+      void this.deliverWithTracking(delivery.id, webhook.url, webhook.secret, payload);
     }
   }
 
-  private async deliver(url: string, secret: string, payload: WebhookPayload, attempt = 1): Promise<void> {
+  async retryPending(): Promise<number> {
+    const pending = await this.deliveryRepository.listPending();
+    let retried = 0;
+    for (const delivery of pending) {
+      const webhook = await this.webhookRepository.findById(delivery.webhookId);
+      if (!webhook) continue;
+      void this.deliverWithTracking(
+        delivery.id,
+        webhook.url,
+        webhook.secret,
+        delivery.payload as unknown as WebhookPayload,
+        delivery.attempts
+      );
+      retried++;
+    }
+    return retried;
+  }
+
+  private async deliverWithTracking(
+    deliveryId: string,
+    url: string,
+    secret: string,
+    payload: WebhookPayload,
+    startAttempt = 0
+  ): Promise<void> {
     const maxAttempts = 3;
     const body = JSON.stringify(payload);
     const signature = createHmac('sha256', secret).update(body).digest('hex');
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-MACP-Signature': signature,
-          'X-MACP-Event': payload.event
-        },
-        body,
-        signal: AbortSignal.timeout(10_000)
-      });
+    for (let attempt = startAttempt + 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-MACP-Signature': signature,
+            'X-MACP-Event': payload.event
+          },
+          body,
+          signal: AbortSignal.timeout(10_000)
+        });
 
-      if (!response.ok) {
-        throw new Error(`webhook returned ${response.status}`);
-      }
-    } catch (error) {
-      this.logger.warn(
-        `webhook delivery to ${url} failed (attempt ${attempt}/${maxAttempts}): ${error instanceof Error ? error.message : String(error)}`
-      );
-      if (attempt < maxAttempts) {
-        const backoffMs = 1000 * 2 ** (attempt - 1);
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
-        return this.deliver(url, secret, payload, attempt + 1);
+        if (!response.ok) {
+          throw new Error(`webhook returned ${response.status}`);
+        }
+
+        await this.deliveryRepository.markDelivered(deliveryId, response.status);
+        return;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `webhook delivery to ${url} failed (attempt ${attempt}/${maxAttempts}): ${errorMessage}`
+        );
+        await this.deliveryRepository.markFailed(deliveryId, attempt, errorMessage);
+        if (attempt < maxAttempts) {
+          const backoffMs = 1000 * 2 ** (attempt - 1);
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        }
       }
     }
   }

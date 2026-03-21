@@ -236,6 +236,13 @@ export interface ProgressProjection {
   }>;
 }
 
+export interface OutboundMessageSummary {
+  total: number;
+  queued: number;
+  accepted: number;
+  rejected: number;
+}
+
 export interface RunStateProjection {
   run: RunSummaryProjection;
   participants: ParticipantProjection[];
@@ -245,6 +252,7 @@ export interface RunStateProjection {
   progress: ProgressProjection;
   timeline: TimelineProjection;
   trace: TraceSummary;
+  outboundMessages: OutboundMessageSummary;
 }
 
 export interface ReplayRequest {

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   CanonicalEvent,
   GraphProjection,
+  OutboundMessageSummary,
   ParticipantProjection,
   ProgressProjection,
   RunStateProjection,
@@ -28,7 +29,8 @@ export class ProjectionService {
       signals: row.signals as unknown as RunStateProjection['signals'],
       progress: row.progress as unknown as ProgressProjection ?? { entries: [] },
       timeline: row.timeline as unknown as RunStateProjection['timeline'],
-      trace: row.traceSummary as unknown as RunStateProjection['trace']
+      trace: row.traceSummary as unknown as RunStateProjection['trace'],
+      outboundMessages: (row as any).outboundMessages as OutboundMessageSummary ?? { total: 0, queued: 0, accepted: 0, rejected: 0 }
     };
   }
 
@@ -103,7 +105,33 @@ export class ProjectionService {
           }
           break;
         }
-        case 'message.sent':
+        case 'message.sent': {
+          const sender = String(event.data.sender ?? event.data.from ?? '');
+          const recipients = (event.data.to as string[] | undefined) ?? [];
+          this.touchParticipant(next, sender, event.ts, 'active', String(event.data.messageType ?? event.type));
+          recipients.forEach((recipient) => this.touchParticipant(next, recipient, event.ts, 'waiting', undefined));
+          recipients.forEach((recipient) => {
+            if (sender && recipient) {
+              next.graph.edges.push({ from: sender, to: recipient, kind: event.type, ts: event.ts });
+            }
+          });
+          next.graph.edges = next.graph.edges.slice(-200);
+          // Track outbound message stats
+          if (!next.outboundMessages) {
+            next.outboundMessages = { total: 0, queued: 0, accepted: 0, rejected: 0 };
+          }
+          next.outboundMessages.total += 1;
+          next.outboundMessages.accepted += 1;
+          break;
+        }
+        case 'message.send_failed': {
+          if (!next.outboundMessages) {
+            next.outboundMessages = { total: 0, queued: 0, accepted: 0, rejected: 0 };
+          }
+          next.outboundMessages.total += 1;
+          next.outboundMessages.rejected += 1;
+          break;
+        }
         case 'message.received': {
           const sender = String(event.data.sender ?? event.data.from ?? '');
           const recipients = (event.data.to as string[] | undefined) ?? [];
@@ -203,7 +231,8 @@ export class ProjectionService {
       signals: { signals: [] },
       progress: { entries: [] },
       timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
-      trace: { spanCount: 0, linkedArtifacts: [] }
+      trace: { spanCount: 0, linkedArtifacts: [] },
+      outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 }
     };
   }
 
