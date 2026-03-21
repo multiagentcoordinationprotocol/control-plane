@@ -47,4 +47,25 @@ export class RuntimeSessionRepository {
       .where(eq(runtimeSessions.runId, runId));
     return this.findByRunId(runId);
   }
+
+  async updateStreamCursor(runId: string, cursor: number) {
+    await this.database.db
+      .update(runtimeSessions)
+      .set({ lastStreamCursor: cursor, updatedAt: new Date().toISOString() })
+      .where(eq(runtimeSessions.runId, runId));
+  }
+
+  async updateStreamConnected(runId: string) {
+    await this.database.db
+      .update(runtimeSessions)
+      .set({ streamConnectedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+      .where(eq(runtimeSessions.runId, runId));
+  }
+
+  async updateStreamDisconnected(runId: string) {
+    await this.database.db
+      .update(runtimeSessions)
+      .set({ streamDisconnectedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+      .where(eq(runtimeSessions.runId, runId));
+  }
 }

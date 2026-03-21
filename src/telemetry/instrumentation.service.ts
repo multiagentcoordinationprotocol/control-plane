@@ -54,6 +54,41 @@ export class InstrumentationService implements OnModuleInit {
     help: 'Total circuit breaker success count'
   });
 
+  readonly outboundMessagesTotal = new client.Counter({
+    name: 'macp_outbound_messages_total',
+    help: 'Total outbound messages by category and status',
+    labelNames: ['category', 'status'] as const
+  });
+
+  readonly inboundMessagesTotal = new client.Counter({
+    name: 'macp_inbound_messages_total',
+    help: 'Total inbound messages by mode and message type',
+    labelNames: ['mode', 'message_type'] as const
+  });
+
+  readonly signalsTotal = new client.Counter({
+    name: 'macp_signals_total',
+    help: 'Total signals by signal type',
+    labelNames: ['signal_type'] as const
+  });
+
+  readonly streamReconnectsTotal = new client.Counter({
+    name: 'macp_stream_reconnects_total',
+    help: 'Total stream reconnection attempts'
+  });
+
+  readonly recoveryTotal = new client.Counter({
+    name: 'macp_recovery_total',
+    help: 'Total recovery attempts by status',
+    labelNames: ['status'] as const
+  });
+
+  readonly webhookDeliveriesTotal = new client.Counter({
+    name: 'macp_webhook_deliveries_total',
+    help: 'Total webhook deliveries by status',
+    labelNames: ['status'] as const
+  });
+
   onModuleInit(): void {
     client.collectDefaultMetrics();
   }

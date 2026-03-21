@@ -31,6 +31,9 @@ import { ReplayRequestDto } from '../dto/replay-request.dto';
 import { CloneRunDto } from '../dto/clone-run.dto';
 import { SendSignalDto } from '../dto/send-signal.dto';
 import { StreamRunQueryDto } from '../dto/stream-run-query.dto';
+import { UpdateContextDto } from '../dto/update-context.dto';
+import { ProjectionService } from '../projection/projection.service';
+import { OutboundMessageRepository } from '../storage/outbound-message.repository';
 import {
   CanonicalEventDto,
   CreateRunResponseDto,
@@ -52,8 +55,19 @@ export class RunsController {
     private readonly eventRepository: EventRepository,
     private readonly replayService: ReplayService,
     private readonly streamHub: StreamHubService,
-    private readonly config: AppConfigService
+    private readonly config: AppConfigService,
+    private readonly projectionService: ProjectionService,
+    private readonly outboundMessageRepository: OutboundMessageRepository
   ) {}
+
+  @Post('validate')
+  @ApiOperation({ summary: 'Preflight validation of an execution request without creating a run.' })
+  @ApiBody({ type: ExecutionRequestDto })
+  async validateRequest(
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: ExecutionRequestDto
+  ) {
+    return this.runExecutor.validate(body);
+  }
 
   @Get()
   @ApiOperation({ summary: 'List runs with optional filtering and pagination.' })
@@ -291,6 +305,30 @@ export class RunsController {
   @HttpCode(204)
   async deleteRun(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.runManager.deleteRun(id);
+  }
+
+  @Get(':id/messages')
+  @ApiOperation({ summary: 'List outbound messages for a run.' })
+  async getRunMessages(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.outboundMessageRepository.listByRunId(id);
+  }
+
+  @Post(':id/context')
+  @ApiOperation({ summary: 'Update context during a running session.' })
+  @ApiBody({ type: UpdateContextDto })
+  async updateContext(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: UpdateContextDto
+  ) {
+    return this.runExecutor.updateContext(id, body);
+  }
+
+  @Post(':id/projection/rebuild')
+  @ApiOperation({ summary: 'Rebuild the projection from persisted canonical events.' })
+  async rebuildProjection(@Param('id', new ParseUUIDPipe()) id: string) {
+    await this.runManager.getRun(id);
+    const events = await this.eventRepository.listCanonicalByRun(id, 0, 100000);
+    return this.projectionService.rebuild(id, events as any);
   }
 
   @Post(':id/archive')

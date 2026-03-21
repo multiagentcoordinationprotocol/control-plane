@@ -32,6 +32,7 @@ import { EventRepository } from './storage/event.repository';
 import { ArtifactRepository } from './storage/artifact.repository';
 import { MetricsRepository } from './storage/metrics.repository';
 import { ProjectionRepository } from './storage/projection.repository';
+import { OutboundMessageRepository } from './storage/outbound-message.repository';
 import { RunRepository } from './storage/run.repository';
 import { RuntimeSessionRepository } from './storage/runtime-session.repository';
 import { InstrumentationService } from './telemetry/instrumentation.service';
@@ -42,6 +43,7 @@ import { RunManagerService } from './runs/run-manager.service';
 import { RunRecoveryService } from './runs/run-recovery.service';
 import { StreamConsumerService } from './runs/stream-consumer.service';
 import { WebhookController } from './controllers/webhook.controller';
+import { WebhookDeliveryRepository } from './webhooks/webhook-delivery.repository';
 import { WebhookRepository } from './webhooks/webhook.repository';
 import { WebhookService } from './webhooks/webhook.service';
 
@@ -68,6 +70,7 @@ import { WebhookService } from './webhooks/webhook.service';
     ProjectionRepository,
     ArtifactRepository,
     MetricsRepository,
+    OutboundMessageRepository,
     StreamHubService,
     EventNormalizerService,
     ProjectionService,
@@ -82,6 +85,7 @@ import { WebhookService } from './webhooks/webhook.service';
     RunRecoveryService,
     RunInsightsService,
     WebhookRepository,
+    WebhookDeliveryRepository,
     WebhookService
   ]
 })

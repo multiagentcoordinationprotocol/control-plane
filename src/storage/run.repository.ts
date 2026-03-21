@@ -1,4 +1,4 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, desc, eq, gt, inArray, lt, sql, SQL } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { RunStatus } from '../contracts/control-plane';
@@ -61,7 +61,7 @@ export class RunRepository {
 
   async findByIdOrThrow(id: string) {
     const row = await this.findById(id);
-    if (!row) throw new Error(`run ${id} not found`);
+    if (!row) throw new NotFoundException(`run ${id} not found`);
     return row;
   }
 

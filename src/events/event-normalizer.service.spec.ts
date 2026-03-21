@@ -197,7 +197,7 @@ describe('EventNormalizerService', () => {
       );
     });
 
-    it('should produce decision.finalized AND session.state.changed for Commitment messageType', () => {
+    it('should produce decision.finalized but NOT session.state.changed for Commitment messageType', () => {
       const decoded = { commitmentId: 'commit-1', action: 'approve' };
       protoRegistry.decodeKnown.mockReturnValue(decoded);
 
@@ -215,17 +215,9 @@ describe('EventNormalizerService', () => {
       expect(decisionFinalized).toBeDefined();
       expect(decisionFinalized!.subject).toEqual({ kind: 'decision', id: 'commit-1' });
 
+      // Commitment should NOT synthesize session.state.changed — only runtime authority can do that
       const stateChanged = events.find((e) => e.type === 'session.state.changed');
-      expect(stateChanged).toBeDefined();
-      expect(stateChanged!.subject).toEqual({ kind: 'session', id: 'session-1' });
-      expect(stateChanged!.data).toEqual(
-        expect.objectContaining({
-          state: 'SESSION_STATE_RESOLVED',
-          reason: 'Commitment observed on stream',
-          commitmentId: 'commit-1',
-          action: 'approve',
-        }),
-      );
+      expect(stateChanged).toBeUndefined();
     });
 
     it('should produce proposal.created derived event for Proposal messageType', () => {
@@ -258,6 +250,69 @@ describe('EventNormalizerService', () => {
       const proposalUpdated = events.find((e) => e.type === 'proposal.updated');
       expect(proposalUpdated).toBeDefined();
       expect(proposalUpdated!.subject).toEqual({ kind: 'proposal', id: 'msg-1' });
+    });
+  });
+
+  describe('progress from task lifecycle', () => {
+    it('should emit additional progress.reported for TaskUpdate with progress field', () => {
+      const decoded = { progress: 50, status: 'halfway done' };
+      protoRegistry.decodeKnown.mockReturnValue(decoded);
+
+      const envelope = makeEnvelope({ messageType: 'TaskUpdate' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const progressEvents = events.filter((e) => e.type === 'progress.reported');
+      expect(progressEvents).toHaveLength(1);
+      expect(progressEvents[0].data.decodedPayload).toEqual(
+        expect.objectContaining({ percentage: 50, message: 'halfway done' }),
+      );
+    });
+
+    it('should emit progress.reported at 100% for TaskComplete', () => {
+      protoRegistry.decodeKnown.mockReturnValue({});
+
+      const envelope = makeEnvelope({ messageType: 'TaskComplete' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const progressEvents = events.filter((e) => e.type === 'progress.reported');
+      expect(progressEvents).toHaveLength(1);
+      expect(progressEvents[0].data.decodedPayload).toEqual(
+        expect.objectContaining({ percentage: 100, message: 'completed' }),
+      );
+    });
+
+    it('should emit progress.reported with failure status for TaskFail', () => {
+      protoRegistry.decodeKnown.mockReturnValue({ reason: 'out of memory' });
+
+      const envelope = makeEnvelope({ messageType: 'TaskFail' });
+      const raw: RawRuntimeEvent = {
+        kind: 'stream-envelope',
+        receivedAt: '2026-01-01T00:00:00.000Z',
+        envelope,
+      };
+      const ctx = makeContext({ knownParticipants: new Set(['agent-a']) });
+
+      const events = service.normalize('run-1', raw, ctx);
+
+      const progressEvents = events.filter((e) => e.type === 'progress.reported');
+      expect(progressEvents).toHaveLength(1);
+      expect(progressEvents[0].data.decodedPayload).toEqual(
+        expect.objectContaining({ message: 'out of memory' }),
+      );
     });
   });
 

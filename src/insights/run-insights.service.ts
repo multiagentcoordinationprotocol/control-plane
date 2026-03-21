@@ -113,6 +113,61 @@ export class RunInsightsService {
     return lines.join('\n') + '\n';
   }
 
+  async *exportRunStream(
+    runId: string,
+    options: { includeRaw?: boolean }
+  ): AsyncGenerator<string> {
+    const run = await this.runRepository.findById(runId);
+    if (!run) throw new NotFoundException(`run ${runId} not found`);
+
+    const [session, projection, metrics, artifacts] = await Promise.all([
+      this.runtimeSessionRepository.findByRunId(runId),
+      this.projectionService.get(runId),
+      this.metricsRepository.get(runId),
+      this.artifactRepository.listByRunId(runId)
+    ]);
+
+    // Emit header line
+    yield JSON.stringify({
+      type: 'header',
+      run: this.toRun(run),
+      session: session as Record<string, unknown> | null,
+      projection,
+      metrics: metrics ? {
+        runId: metrics.runId,
+        eventCount: metrics.eventCount,
+        messageCount: metrics.messageCount,
+        signalCount: metrics.signalCount,
+        proposalCount: metrics.proposalCount,
+        toolCallCount: metrics.toolCallCount,
+        decisionCount: metrics.decisionCount,
+        streamReconnectCount: metrics.streamReconnectCount,
+        firstEventAt: metrics.firstEventAt ?? undefined,
+        lastEventAt: metrics.lastEventAt ?? undefined,
+        durationMs: metrics.durationMs ?? undefined,
+        sessionState: (metrics.sessionState as MetricsSummary['sessionState']) ?? undefined
+      } : null,
+      artifacts: artifacts.map((a) => ({
+        id: a.id, runId: a.runId, kind: a.kind, label: a.label,
+        uri: a.uri ?? undefined, inline: a.inline ?? undefined, createdAt: a.createdAt
+      })),
+      exportedAt: new Date().toISOString()
+    }) + '\n';
+
+    // Stream canonical events
+    for await (const event of this.eventRepository.streamCanonicalByRun(runId)) {
+      yield JSON.stringify({ ...event, type: 'canonical_event' }) + '\n';
+    }
+
+    // Stream raw events if requested
+    if (options.includeRaw) {
+      const rawEvents = await this.eventRepository.listRawByRun(runId, 0, 100000);
+      for (const event of rawEvents) {
+        yield JSON.stringify({ ...event, type: 'raw_event' }) + '\n';
+      }
+    }
+  }
+
   async compareRuns(leftRunId: string, rightRunId: string): Promise<RunComparisonResult> {
     const [leftRun, rightRun] = await Promise.all([
       this.runRepository.findById(leftRunId),

@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { ExecutionRequest } from '../contracts/control-plane';
 import { AppConfigService } from '../config/app-config.service';
+import { DatabaseService } from '../db/database.service';
 import { RunEventService } from '../events/run-event.service';
 import { RunRepository } from '../storage/run.repository';
 import { RuntimeSessionRepository } from '../storage/runtime-session.repository';
@@ -13,6 +14,7 @@ export class RunRecoveryService implements OnApplicationBootstrap {
 
   constructor(
     private readonly config: AppConfigService,
+    private readonly database: DatabaseService,
     private readonly runRepository: RunRepository,
     private readonly runtimeSessionRepository: RuntimeSessionRepository,
     private readonly runManager: RunManagerService,
@@ -28,21 +30,36 @@ export class RunRecoveryService implements OnApplicationBootstrap {
     await this.recoverActiveRuns();
   }
 
-  async recoverActiveRuns(): Promise<void> {
+  async recoverActiveRuns(): Promise<{ recovered: string[]; failed: Array<{ runId: string; error: string }> }> {
     const activeRuns = await this.runRepository.listActiveRuns();
     if (activeRuns.length === 0) {
       this.logger.log('no active runs to recover');
-      return;
+      return { recovered: [], failed: [] };
     }
     this.logger.log(`recovering ${activeRuns.length} active run(s)`);
 
+    const recovered: string[] = [];
+    const failed: Array<{ runId: string; error: string }> = [];
+
     for (const run of activeRuns) {
       try {
-        await this.recoverRun(run);
+        // Distributed lock: prevent multiple CP instances from recovering the same run
+        const lockKey = `run-recovery:${run.id}`;
+        const acquired = await this.database.tryAdvisoryLock(lockKey);
+        if (!acquired) {
+          this.logger.log(`skipping run ${run.id} — another instance holds the recovery lock`);
+          continue;
+        }
+        try {
+          await this.recoverRun(run);
+          recovered.push(run.id);
+        } finally {
+          await this.database.advisoryUnlock(lockKey);
+        }
       } catch (error) {
-        this.logger.error(
-          `failed to recover run ${run.id}: ${error instanceof Error ? error.message : String(error)}`
-        );
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.logger.error(`failed to recover run ${run.id}: ${errorMessage}`);
+        failed.push({ runId: run.id, error: errorMessage });
         try {
           await this.runManager.markFailed(run.id, error);
         } catch (markError) {
@@ -52,6 +69,9 @@ export class RunRecoveryService implements OnApplicationBootstrap {
         }
       }
     }
+
+    this.logger.log(`recovery summary: ${recovered.length} recovered, ${failed.length} failed`);
+    return { recovered, failed };
   }
 
   private async recoverRun(run: {
@@ -94,13 +114,16 @@ export class RunRecoveryService implements OnApplicationBootstrap {
       }
     ]);
 
+    // Use the persisted stream cursor if available, otherwise fall back to run's lastEventSeq
+    const resumeFromSeq = Math.max(session?.lastStreamCursor ?? 0, run.lastEventSeq);
+
     await this.streamConsumer.start({
       runId: run.id,
       execution: executionRequest,
       runtimeKind: run.runtimeKind,
       runtimeSessionId,
       subscriberId,
-      resumeFromSeq: run.lastEventSeq
+      resumeFromSeq
     });
 
     this.logger.log(`recovered run ${run.id} from seq ${run.lastEventSeq}`);

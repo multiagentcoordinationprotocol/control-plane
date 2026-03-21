@@ -70,6 +70,9 @@ export class RunStateResponseDto implements RunStateProjection {
 
   @ApiProperty({ type: 'object', additionalProperties: true })
   trace!: RunStateProjection['trace'];
+
+  @ApiProperty({ type: 'object', additionalProperties: true })
+  outboundMessages!: RunStateProjection['outboundMessages'];
 }
 
 export class MetricsSummaryDto implements MetricsSummary {

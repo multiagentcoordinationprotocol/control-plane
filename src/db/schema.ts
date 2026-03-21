@@ -1,4 +1,5 @@
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -56,6 +57,10 @@ export const runtimeSessions = pgTable(
     sessionState: varchar('session_state', { length: 64 }).notNull().default('SESSION_STATE_UNSPECIFIED'),
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
+    capabilities: jsonb('capabilities').$type<Record<string, unknown>>().notNull().default({}),
+    lastStreamCursor: integer('last_stream_cursor'),
+    streamConnectedAt: timestamp('stream_connected_at', { withTimezone: true, mode: 'string' }),
+    streamDisconnectedAt: timestamp('stream_disconnected_at', { withTimezone: true, mode: 'string' }),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
@@ -102,6 +107,7 @@ export const runEventsCanonical = pgTable(
     traceId: varchar('trace_id', { length: 255 }),
     spanId: varchar('span_id', { length: 255 }),
     parentSpanId: varchar('parent_span_id', { length: 255 }),
+    schemaVersion: integer('schema_version').notNull().default(3),
     data: jsonb('data').$type<Record<string, unknown>>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
   },
@@ -193,6 +199,32 @@ export const runMetrics = pgTable(
   })
 );
 
+export const runOutboundMessages = pgTable(
+  'run_outbound_messages',
+  {
+    id: uuid('id').primaryKey(),
+    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    runtimeSessionId: varchar('runtime_session_id', { length: 255 }).notNull(),
+    messageId: varchar('message_id', { length: 255 }).notNull(),
+    messageType: varchar('message_type', { length: 128 }).notNull(),
+    category: varchar('category', { length: 32 }).notNull(),
+    sender: varchar('sender', { length: 255 }).notNull(),
+    recipients: jsonb('recipients').$type<string[]>().notNull().default([]),
+    status: varchar('status', { length: 32 }).notNull().default('queued'),
+    payloadDescriptor: jsonb('payload_descriptor').$type<Record<string, unknown>>().notNull().default({}),
+    ack: jsonb('ack').$type<Record<string, unknown>>(),
+    errorMessage: text('error_message'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true, mode: 'string' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
+  },
+  (table) => ({
+    messageIdIdx: uniqueIndex('run_outbound_messages_message_id_unique').on(table.messageId),
+    runIdx: index('run_outbound_messages_run_idx').on(table.runId),
+    statusIdx: index('run_outbound_messages_status_idx').on(table.status)
+  })
+);
+
 export const webhooks = pgTable(
   'webhooks',
   {
@@ -200,11 +232,34 @@ export const webhooks = pgTable(
     url: text('url').notNull(),
     events: jsonb('events').$type<string[]>().notNull().default([]),
     secret: varchar('secret', { length: 255 }).notNull(),
-    active: integer('active').notNull().default(1),
+    active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
   },
   (table) => ({
     activeIdx: index('webhooks_active_idx').on(table.active)
+  })
+);
+
+export const webhookDeliveries = pgTable(
+  'webhook_deliveries',
+  {
+    id: uuid('id').primaryKey(),
+    webhookId: uuid('webhook_id').notNull().references(() => webhooks.id, { onDelete: 'cascade' }),
+    event: varchar('event', { length: 128 }).notNull(),
+    runId: uuid('run_id').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    status: varchar('status', { length: 32 }).notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    lastAttemptAt: timestamp('last_attempt_at', { withTimezone: true, mode: 'string' }),
+    responseStatus: integer('response_status'),
+    errorMessage: text('error_message'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'string' })
+  },
+  (table) => ({
+    webhookIdx: index('webhook_deliveries_webhook_idx').on(table.webhookId),
+    statusIdx: index('webhook_deliveries_status_idx').on(table.status),
+    runIdx: index('webhook_deliveries_run_idx').on(table.runId)
   })
 );

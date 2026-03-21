@@ -51,6 +51,7 @@ function makeEmptyProjection(runId: string): RunStateProjection {
     progress: { entries: [] },
     timeline: { latestSeq: 0, totalEvents: 0, recent: [] },
     trace: { spanCount: 0, linkedArtifacts: [] },
+    outboundMessages: { total: 0, queued: 0, accepted: 0, rejected: 0 },
   };
 }
 

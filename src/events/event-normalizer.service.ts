@@ -127,22 +127,38 @@ export class EventNormalizerService implements EventNormalizer {
       );
     }
 
-    if (envelope.messageType === 'Commitment') {
-      const commitment = decoded ?? {};
+    // Emit additional progress.reported for TaskUpdate/TaskComplete/TaskFail
+    if (envelope.messageType === 'TaskUpdate' && decoded) {
+      const progress = (decoded as Record<string, unknown>).progress;
+      if (progress !== undefined) {
+        canonical.push(
+          this.makeEvent(runId, ts, 'progress.reported', { kind: 'message', id: envelope.messageId }, {
+            modeName: envelope.mode,
+            messageType: envelope.messageType,
+            sender: envelope.sender,
+            decodedPayload: { percentage: progress, message: (decoded as Record<string, unknown>).status ?? '' }
+          }, envelope.messageType)
+        );
+      }
+    }
+    if (envelope.messageType === 'TaskComplete') {
       canonical.push(
-        this.makeEvent(
-          runId,
-          ts,
-          'session.state.changed',
-          { kind: 'session', id: envelope.sessionId },
-          {
-            state: 'SESSION_STATE_RESOLVED',
-            reason: 'Commitment observed on stream',
-            commitmentId: commitment.commitmentId,
-            action: commitment.action
-          },
-          envelope.messageType
-        )
+        this.makeEvent(runId, ts, 'progress.reported', { kind: 'message', id: envelope.messageId }, {
+          modeName: envelope.mode,
+          messageType: envelope.messageType,
+          sender: envelope.sender,
+          decodedPayload: { percentage: 100, message: 'completed' }
+        }, envelope.messageType)
+      );
+    }
+    if (envelope.messageType === 'TaskFail') {
+      canonical.push(
+        this.makeEvent(runId, ts, 'progress.reported', { kind: 'message', id: envelope.messageId }, {
+          modeName: envelope.mode,
+          messageType: envelope.messageType,
+          sender: envelope.sender,
+          decodedPayload: { percentage: undefined, message: (decoded as Record<string, unknown> | undefined)?.reason ?? 'failed' }
+        }, envelope.messageType)
       );
     }
 

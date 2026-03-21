@@ -5,6 +5,8 @@ import { EventRepository } from '../storage/event.repository';
 import { ReplayService } from '../replay/replay.service';
 import { StreamHubService } from '../events/stream-hub.service';
 import { AppConfigService } from '../config/app-config.service';
+import { ProjectionService } from '../projection/projection.service';
+import { OutboundMessageRepository } from '../storage/outbound-message.repository';
 
 describe('RunsController', () => {
   let controller: RunsController;
@@ -12,6 +14,7 @@ describe('RunsController', () => {
     launch: jest.Mock;
     cancel: jest.Mock;
     sendSignal: jest.Mock;
+    updateContext: jest.Mock;
   };
   let mockRunManager: {
     listRuns: jest.Mock;
@@ -26,12 +29,19 @@ describe('RunsController', () => {
   let mockReplayService: Partial<ReplayService>;
   let mockStreamHub: Partial<StreamHubService>;
   let mockConfig: Partial<AppConfigService>;
+  let mockProjectionService: {
+    rebuild: jest.Mock;
+  };
+  let mockOutboundMessageRepository: {
+    listByRunId: jest.Mock;
+  };
 
   beforeEach(() => {
     mockRunExecutor = {
       launch: jest.fn(),
       cancel: jest.fn(),
       sendSignal: jest.fn(),
+      updateContext: jest.fn(),
     };
     mockRunManager = {
       listRuns: jest.fn(),
@@ -48,6 +58,12 @@ describe('RunsController', () => {
     mockConfig = {
       streamSseHeartbeatMs: 15000,
     };
+    mockProjectionService = {
+      rebuild: jest.fn(),
+    };
+    mockOutboundMessageRepository = {
+      listByRunId: jest.fn(),
+    };
 
     controller = new RunsController(
       mockRunExecutor as unknown as RunExecutorService,
@@ -56,6 +72,8 @@ describe('RunsController', () => {
       mockReplayService as unknown as ReplayService,
       mockStreamHub as unknown as StreamHubService,
       mockConfig as unknown as AppConfigService,
+      mockProjectionService as unknown as ProjectionService,
+      mockOutboundMessageRepository as unknown as OutboundMessageRepository,
     );
   });
 
@@ -246,6 +264,43 @@ describe('RunsController', () => {
 
       expect(mockRunExecutor.sendSignal).toHaveBeenCalledWith('run-1', body);
       expect(result).toEqual(signalResult);
+    });
+  });
+
+  // ===========================================================================
+  // updateContext
+  // ===========================================================================
+  describe('updateContext', () => {
+    it('delegates to runExecutor.updateContext', async () => {
+      const contextResult = { messageId: 'msg-ctx', ack: { ok: true } };
+      mockRunExecutor.updateContext.mockResolvedValue(contextResult);
+
+      const body = { from: 'agent-1', context: { key: 'value' } };
+      const result = await controller.updateContext('run-1', body as any);
+
+      expect(mockRunExecutor.updateContext).toHaveBeenCalledWith('run-1', body);
+      expect(result).toEqual(contextResult);
+    });
+  });
+
+  // ===========================================================================
+  // rebuildProjection
+  // ===========================================================================
+  describe('rebuildProjection', () => {
+    it('fetches events and delegates to projectionService.rebuild', async () => {
+      const fakeRun = { id: 'run-1', status: 'completed' };
+      mockRunManager.getRun.mockResolvedValue(fakeRun);
+      const events = [{ id: 'e1', seq: 1, type: 'run.created' }];
+      mockEventRepository.listCanonicalByRun.mockResolvedValue(events);
+      const projection = { run: { runId: 'run-1', status: 'completed' } };
+      mockProjectionService.rebuild.mockResolvedValue(projection);
+
+      const result = await controller.rebuildProjection('run-1');
+
+      expect(mockRunManager.getRun).toHaveBeenCalledWith('run-1');
+      expect(mockEventRepository.listCanonicalByRun).toHaveBeenCalledWith('run-1', 0, 100000);
+      expect(mockProjectionService.rebuild).toHaveBeenCalledWith('run-1', events);
+      expect(result).toEqual(projection);
     });
   });
 

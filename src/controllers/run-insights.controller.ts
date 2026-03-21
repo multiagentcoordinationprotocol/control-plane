@@ -2,12 +2,15 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Param,
   ParseUUIDPipe,
   Post,
   Query,
+  Res,
   ValidationPipe
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiBody, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CompareRunsDto } from '../dto/compare-runs.dto';
 import { ExportRunQueryDto } from '../dto/export-run-query.dto';
@@ -43,6 +46,24 @@ export class RunInsightsController {
       includeRaw: query.includeRaw,
       eventLimit: query.eventLimit
     });
+  }
+
+  @Get(':id/export/stream')
+  @ApiOperation({ summary: 'Stream export as JSONL (newline-delimited JSON).' })
+  @Header('Content-Type', 'application/x-ndjson')
+  async streamExport(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query(new ValidationPipe({ transform: true, whitelist: true })) query: ExportRunQueryDto,
+    @Res() res: Response
+  ) {
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Transfer-Encoding', 'chunked');
+    for await (const line of this.insightsService.exportRunStream(id, {
+      includeRaw: query.includeRaw
+    })) {
+      res.write(line);
+    }
+    res.end();
   }
 
   @Post('compare')

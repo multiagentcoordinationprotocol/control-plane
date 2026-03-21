@@ -14,6 +14,7 @@ interface ActiveStream {
   finalized: boolean;
   connected: boolean;
   lastProcessedSeq: number;
+  finalizingPromise?: Promise<void>;
 }
 
 @Injectable()
@@ -80,14 +81,22 @@ export class StreamConsumerService implements OnModuleDestroy {
     error?: unknown
   ): Promise<void> {
     if (marker.finalized) return;
-    marker.finalized = true;
-    marker.aborted = true;
-    if (status === 'completed') {
-      await this.runManager.markCompleted(runId);
-    } else {
-      await this.runManager.markFailed(runId, error ?? new Error('unknown failure'));
+    if (marker.finalizingPromise) {
+      await marker.finalizingPromise;
+      return;
     }
-    this.streamHub.complete(runId);
+    const doFinalize = async () => {
+      marker.finalized = true;
+      marker.aborted = true;
+      if (status === 'completed') {
+        await this.runManager.markCompleted(runId);
+      } else {
+        await this.runManager.markFailed(runId, error ?? new Error('unknown failure'));
+      }
+      this.streamHub.complete(runId);
+    };
+    marker.finalizingPromise = doFinalize();
+    await marker.finalizingPromise;
   }
 
   private backoffMs(retries: number): number {
@@ -279,6 +288,11 @@ export class StreamConsumerService implements OnModuleDestroy {
       marker.lastProcessedSeq = event.seq;
     }
 
+    // Persist stream cursor for lossless reconnect
+    if (marker.lastProcessedSeq > 0) {
+      await this.runtimeSessionRepository.updateStreamCursor(runId, marker.lastProcessedSeq);
+    }
+
     const sessionStateChange = emitted.find((event) => event.type === 'session.state.changed');
     if (sessionStateChange && typeof sessionStateChange.data.state === 'string') {
       await this.runtimeSessionRepository.updateState(
@@ -296,10 +310,5 @@ export class StreamConsumerService implements OnModuleDestroy {
       }
     }
 
-    const finalized = emitted.find((event) => event.type === 'decision.finalized');
-    if (finalized) {
-      await this.runtimeSessionRepository.updateState(runId, 'SESSION_STATE_RESOLVED', new Date().toISOString());
-      await this.finalizeRun(runId, marker, 'completed');
-    }
   }
 }
