@@ -175,6 +175,7 @@ export class RunRepository {
     sortBy?: 'createdAt' | 'updatedAt';
     sortOrder?: 'asc' | 'desc';
     includeSandbox?: boolean;
+    includeArchived?: boolean;
   }) {
     const conditions: SQL[] = [];
 
@@ -194,6 +195,9 @@ export class RunRepository {
     if (!filters.includeSandbox) {
       conditions.push(sql`${runs.mode} != 'sandbox'`);
     }
+    if (!filters.includeArchived) {
+      conditions.push(sql`NOT (${runs.tags} @> '["archived"]'::jsonb)`);
+    }
 
     const sortCol = filters.sortBy === 'updatedAt' ? runs.updatedAt : runs.createdAt;
     const orderFn = filters.sortOrder === 'asc' ? asc : desc;
@@ -207,5 +211,46 @@ export class RunRepository {
       .offset(filters.offset ?? 0);
 
     return query;
+  }
+
+  async listCount(filters: {
+    status?: RunStatus;
+    tags?: string[];
+    createdAfter?: string;
+    createdBefore?: string;
+    includeSandbox?: boolean;
+    includeArchived?: boolean;
+  }): Promise<number> {
+    const conditions: SQL[] = [];
+    if (filters.status) conditions.push(eq(runs.status, filters.status));
+    if (filters.tags && filters.tags.length > 0) {
+      conditions.push(sql`${runs.tags} @> ${JSON.stringify(filters.tags)}::jsonb`);
+    }
+    if (filters.createdAfter) conditions.push(gt(runs.createdAt, filters.createdAfter));
+    if (filters.createdBefore) conditions.push(lt(runs.createdAt, filters.createdBefore));
+    if (!filters.includeSandbox) conditions.push(sql`${runs.mode} != 'sandbox'`);
+    if (!filters.includeArchived) {
+      conditions.push(sql`NOT (${runs.tags} @> '["archived"]'::jsonb)`);
+    }
+    const result = await this.database.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(runs)
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+    return result[0]?.count ?? 0;
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.database.db.delete(runs).where(eq(runs.id, id));
+  }
+
+  async addTag(id: string, tag: string): Promise<typeof runs.$inferSelect> {
+    await this.database.db.execute(sql`
+      UPDATE runs
+      SET tags = tags || ${JSON.stringify([tag])}::jsonb,
+          updated_at = now()
+      WHERE id = ${id}
+      AND NOT (tags @> ${JSON.stringify([tag])}::jsonb)
+    `);
+    return this.findByIdOrThrow(id);
   }
 }

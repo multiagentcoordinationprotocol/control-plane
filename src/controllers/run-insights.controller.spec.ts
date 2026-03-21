@@ -1,20 +1,30 @@
 import { RunInsightsController } from './run-insights.controller';
 import { RunInsightsService } from '../insights/run-insights.service';
+import { RunExecutorService } from '../runs/run-executor.service';
 
 describe('RunInsightsController', () => {
   let controller: RunInsightsController;
   let mockInsightsService: {
     exportRun: jest.Mock;
+    exportRunJsonl: jest.Mock;
     compareRuns: jest.Mock;
+  };
+  let mockRunExecutor: {
+    cancel: jest.Mock;
   };
 
   beforeEach(() => {
     mockInsightsService = {
       exportRun: jest.fn(),
+      exportRunJsonl: jest.fn(),
       compareRuns: jest.fn()
     };
+    mockRunExecutor = {
+      cancel: jest.fn()
+    };
     controller = new RunInsightsController(
-      mockInsightsService as unknown as RunInsightsService
+      mockInsightsService as unknown as RunInsightsService,
+      mockRunExecutor as unknown as RunExecutorService
     );
   });
 
@@ -45,6 +55,21 @@ describe('RunInsightsController', () => {
         eventLimit: undefined
       });
     });
+
+    it('delegates to exportRunJsonl when format is jsonl', async () => {
+      const jsonl = '{"type":"header"}\n';
+      mockInsightsService.exportRunJsonl.mockResolvedValue(jsonl);
+
+      const query = { includeCanonical: true, includeRaw: false, eventLimit: 500, format: 'jsonl' as const };
+      const result = await controller.exportRun('run-1', query as any);
+
+      expect(mockInsightsService.exportRunJsonl).toHaveBeenCalledWith('run-1', {
+        includeCanonical: true,
+        includeRaw: false,
+        eventLimit: 500
+      });
+      expect(result).toBe(jsonl);
+    });
   });
 
   describe('compareRuns', () => {
@@ -57,6 +82,39 @@ describe('RunInsightsController', () => {
 
       expect(mockInsightsService.compareRuns).toHaveBeenCalledWith('run-1', 'run-2');
       expect(result).toEqual(comparison);
+    });
+  });
+
+  describe('batchCancel', () => {
+    it('cancels multiple runs and returns results', async () => {
+      mockRunExecutor.cancel
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('not found'));
+
+      const result = await controller.batchCancel({ runIds: ['run-1', 'run-2'] });
+
+      expect(result).toEqual([
+        { runId: 'run-1', status: 'cancelled', error: undefined },
+        { runId: 'run-2', status: 'failed', error: 'not found' }
+      ]);
+      expect(mockRunExecutor.cancel).toHaveBeenCalledWith('run-1', 'batch cancel');
+      expect(mockRunExecutor.cancel).toHaveBeenCalledWith('run-2', 'batch cancel');
+    });
+  });
+
+  describe('batchExport', () => {
+    it('exports multiple runs and returns bundles', async () => {
+      const bundle1 = { run: { id: 'run-1' }, exportedAt: '2026-01-01T00:00:00Z' };
+      const bundle2 = { run: { id: 'run-2' }, exportedAt: '2026-01-01T00:00:00Z' };
+      mockInsightsService.exportRun
+        .mockResolvedValueOnce(bundle1)
+        .mockResolvedValueOnce(bundle2);
+
+      const result = await controller.batchExport({ runIds: ['run-1', 'run-2'] });
+
+      expect(result).toEqual([bundle1, bundle2]);
+      expect(mockInsightsService.exportRun).toHaveBeenCalledWith('run-1', { includeCanonical: true, includeRaw: false });
+      expect(mockInsightsService.exportRun).toHaveBeenCalledWith('run-2', { includeCanonical: true, includeRaw: false });
     });
   });
 });

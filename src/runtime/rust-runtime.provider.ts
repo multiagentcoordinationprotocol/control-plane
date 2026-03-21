@@ -10,21 +10,26 @@ import {
   RuntimeAck,
   RuntimeCancelResult,
   RuntimeCancelSessionRequest,
+  RuntimeEnvelope,
   RuntimeGetSessionRequest,
   RuntimeHealth,
   RuntimeInitializeRequest,
   RuntimeInitializeResult,
   RuntimeManifestResult,
   RuntimeModeDescriptor,
+  RuntimeOpenSessionRequest,
   RuntimeProvider,
   RuntimeRootDescriptor,
   RuntimeSendRequest,
   RuntimeSendResult,
+  RuntimeSessionHandle,
   RuntimeSessionSnapshot,
   RuntimeStartSessionRequest,
   RuntimeStartSessionResult,
   RuntimeStreamSessionRequest
 } from '../contracts/runtime';
+import { AppException } from '../errors/app-exception';
+import { ErrorCode } from '../errors/error-codes';
 import { CircuitBreaker } from './circuit-breaker';
 import { ProtoRegistryService } from './proto-registry.service';
 import { RuntimeCredentialResolverService } from './runtime-credential-resolver.service';
@@ -48,6 +53,10 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
   getCircuitBreakerState() {
     return this.circuitBreaker.getState();
+  }
+
+  resetCircuitBreaker(): void {
+    this.circuitBreaker.reset();
   }
 
   onModuleInit(): void {
@@ -155,11 +164,221 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     );
 
     const ack = this.fromAck(response.ack);
+    if (!ack.ok && ack.error) {
+      throw new AppException(
+        ErrorCode.RUNTIME_UNAVAILABLE,
+        `Runtime rejected SessionStart: [${ack.error.code}] ${ack.error.message}`,
+        502
+      );
+    }
     return {
       runtimeSessionId: ack.sessionId || runtimeSessionId,
       initiator: creds.sender,
       ack
     };
+  }
+
+  openSession(req: RuntimeOpenSessionRequest): RuntimeSessionHandle {
+    const initiator = this.chooseInitiator(req.execution);
+    const participant = this.findParticipant(req.execution, initiator);
+    const runtimeSessionId = randomUUID();
+
+    const payload = this.protoRegistry.encodeMessage('macp.v1.SessionStartPayload', {
+      intent: req.execution.session.metadata?.intent ?? '',
+      participants: req.execution.session.participants.map((item) => item.id),
+      mode_version: req.execution.session.modeVersion,
+      configuration_version: req.execution.session.configurationVersion,
+      policy_version: req.execution.session.policyVersion ?? '',
+      ttl_ms: req.execution.session.ttlMs,
+      context: this.protoRegistry.encodeSessionContext(
+        req.execution.session.context,
+        req.execution.session.contextEnvelope
+      ),
+      roots: (req.execution.session.roots ?? []).map((root) => ({ uri: root.uri, name: root.name ?? '' }))
+    });
+
+    const sessionStartEnvelope = this.buildEnvelope({
+      mode: req.execution.session.modeName,
+      messageType: 'SessionStart',
+      messageId: randomUUID(),
+      sessionId: runtimeSessionId,
+      sender: initiator,
+      payload
+    });
+
+    // Event-driven async queue for the bidirectional stream
+    const buffer: RawRuntimeEvent[] = [];
+    let resolveWait: (() => void) | null = null;
+    let ended = false;
+    let streamFailure: Error | null = null;
+    let grpcCall: any = null;
+
+    const notify = () => {
+      if (resolveWait) {
+        const r = resolveWait;
+        resolveWait = null;
+        r();
+      }
+    };
+
+    const waitForItem = (): Promise<void> =>
+      new Promise<void>((r) => {
+        if (buffer.length > 0 || ended) {
+          r();
+        } else {
+          resolveWait = r;
+        }
+      });
+
+    // Session ack promise — resolved when we receive the SessionStart echo
+    let resolveSessionAck: (result: RuntimeStartSessionResult) => void;
+    let rejectSessionAck: (err: Error) => void;
+    const sessionAck = new Promise<RuntimeStartSessionResult>((resolve, reject) => {
+      resolveSessionAck = resolve;
+      rejectSessionAck = reject;
+    });
+
+    let sessionAckSettled = false;
+
+    // Launch the bidirectional stream asynchronously
+    const launch = async () => {
+      try {
+        const creds = await this.credentialResolver.resolve({
+          runtimeKind: this.kind,
+          requester: req.execution.execution?.requester,
+          participant,
+          fallbackSender: initiator
+        });
+
+        const metadata = this.buildMetadata(creds.metadata);
+        const streamMethod = this.getClientMethod('StreamSession');
+        grpcCall = streamMethod.call(this.client, metadata);
+
+        grpcCall.on('data', (chunk: any) => {
+          const envelope = this.fromEnvelope(chunk.envelope);
+          const event: RawRuntimeEvent = {
+            kind: 'stream-envelope',
+            receivedAt: new Date().toISOString(),
+            envelope
+          };
+
+          // First envelope back is the SessionStart echo — resolve the ack
+          if (!sessionAckSettled && envelope.messageType === 'SessionStart') {
+            sessionAckSettled = true;
+            resolveSessionAck({
+              runtimeSessionId: envelope.sessionId || runtimeSessionId,
+              initiator: creds.sender,
+              ack: {
+                ok: true,
+                duplicate: false,
+                messageId: envelope.messageId,
+                sessionId: envelope.sessionId || runtimeSessionId,
+                acceptedAtUnixMs: envelope.timestampUnixMs,
+                sessionState: 'SESSION_STATE_OPEN'
+              }
+            });
+          }
+
+          buffer.push(event);
+          notify();
+        });
+
+        grpcCall.on('error', (error: Error) => {
+          streamFailure = error;
+          ended = true;
+          if (!sessionAckSettled) {
+            sessionAckSettled = true;
+            rejectSessionAck(error);
+          }
+          notify();
+        });
+
+        grpcCall.on('end', () => {
+          ended = true;
+          if (!sessionAckSettled) {
+            sessionAckSettled = true;
+            rejectSessionAck(new Error('stream ended before SessionStart ack'));
+          }
+          notify();
+        });
+
+        // Write the SessionStart envelope as the first frame
+        grpcCall.write({ envelope: this.toGrpcEnvelope(sessionStartEnvelope) });
+
+      } catch (error) {
+        ended = true;
+        if (!sessionAckSettled) {
+          sessionAckSettled = true;
+          rejectSessionAck(error instanceof Error ? error : new Error(String(error)));
+        }
+        notify();
+      }
+    };
+
+    void launch();
+
+    // Build the async iterable for events
+    const events: AsyncIterable<RawRuntimeEvent> = {
+      [Symbol.asyncIterator]() {
+        let started = false;
+        return {
+          async next(): Promise<IteratorResult<RawRuntimeEvent>> {
+            if (!started) {
+              started = true;
+              return {
+                done: false,
+                value: {
+                  kind: 'stream-status',
+                  receivedAt: new Date().toISOString(),
+                  streamStatus: { status: 'opened' }
+                }
+              };
+            }
+
+            while (true) {
+              if (buffer.length > 0) {
+                return { done: false, value: buffer.shift()! };
+              }
+              if (ended) {
+                if (streamFailure) throw streamFailure;
+                return { done: true, value: undefined };
+              }
+              await waitForItem();
+            }
+          },
+          async return(): Promise<IteratorResult<RawRuntimeEvent>> {
+            if (grpcCall) {
+              try { grpcCall.cancel(); } catch { /* ignore */ }
+            }
+            return { done: true, value: undefined };
+          }
+        };
+      }
+    };
+
+    const handle: RuntimeSessionHandle = {
+      send: (envelope: RuntimeEnvelope) => {
+        if (grpcCall && !ended) {
+          grpcCall.write({ envelope: this.toGrpcEnvelope(envelope) });
+        }
+      },
+      events,
+      closeWrite: () => {
+        if (grpcCall && !ended) {
+          grpcCall.end();
+        }
+      },
+      abort: () => {
+        ended = true;
+        if (grpcCall) {
+          try { grpcCall.cancel(); } catch { /* ignore */ }
+        }
+        notify();
+      },
+      sessionAck
+    };
+
+    return handle;
   }
 
   async send(req: RuntimeSendRequest): Promise<RuntimeSendResult> {
@@ -185,10 +404,15 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       this.buildMetadata(creds.metadata)
     );
 
-    return {
-      ack: this.fromAck(response.ack),
-      envelope
-    };
+    const ack = this.fromAck(response.ack);
+    if (!ack.ok && ack.error) {
+      throw new AppException(
+        ErrorCode.RUNTIME_UNAVAILABLE,
+        `Runtime rejected message: [${ack.error.code}] ${ack.error.message}`,
+        502
+      );
+    }
+    return { ack, envelope };
   }
 
   async *streamSession(req: RuntimeStreamSessionRequest): AsyncIterable<RawRuntimeEvent> {

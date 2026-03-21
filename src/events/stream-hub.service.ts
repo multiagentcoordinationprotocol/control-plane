@@ -86,6 +86,7 @@ export class StreamHubService implements OnModuleDestroy {
         }
       }
     }, 60_000);
+    if (typeof timer === 'object' && 'unref' in timer) timer.unref();
 
     this.cleanupTimers.set(runId, timer);
   }

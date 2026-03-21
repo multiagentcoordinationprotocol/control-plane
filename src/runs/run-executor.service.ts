@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { ExecutionRequest } from '../contracts/control-plane';
 import { ArtifactService } from '../artifacts/artifact.service';
 import { AppConfigService } from '../config/app-config.service';
@@ -73,18 +74,27 @@ export class RunExecutorService {
       throw new BadRequestException('run is not in running state');
     }
     const provider = this.runtimeRegistry.get(run.runtimeKind);
-    const session = await this.runtimeSessionRepository.findByRunId(runId);
 
+    // Runtime requires empty session_id and mode for Signal messages
     const sendResult = await provider.send({
       runId,
-      runtimeSessionId: run.runtimeSessionId,
-      modeName: (session as any)?.modeName ?? '',
+      runtimeSessionId: '',
+      modeName: '',
       from: params.from,
       to: params.to,
-      messageType: params.messageType,
+      messageType: 'Signal',
       payload: Buffer.from(JSON.stringify(params.payload ?? {}), 'utf8'),
       payloadDescriptor: params.payload
     });
+
+    // Check ack for errors
+    if (!sendResult.ack.ok && sendResult.ack.error) {
+      throw new AppException(
+        ErrorCode.SIGNAL_DISPATCH_FAILED,
+        `Runtime rejected signal: [${sendResult.ack.error.code}] ${sendResult.ack.error.message}`,
+        502
+      );
+    }
 
     await this.eventService.emitControlPlaneEvents(runId, [
       {
@@ -106,44 +116,26 @@ export class RunExecutorService {
     return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
   }
 
-  async updateContext(runId: string, params: {
-    from: string;
-    context: Record<string, unknown>;
-  }) {
+  async clone(runId: string, overrides?: { tags?: string[]; context?: Record<string, unknown> }) {
     const run = await this.runManager.getRun(runId);
-    if (!run.runtimeSessionId || run.status !== 'running') {
-      throw new BadRequestException('run is not in running state');
+    const executionRequest = run.metadata?.executionRequest as ExecutionRequest | undefined;
+    if (!executionRequest) {
+      throw new BadRequestException('run does not have an execution request in metadata');
     }
-    const provider = this.runtimeRegistry.get(run.runtimeKind);
-    const session = await this.runtimeSessionRepository.findByRunId(runId);
 
-    const sendResult = await provider.send({
-      runId,
-      runtimeSessionId: run.runtimeSessionId,
-      modeName: (session as any)?.modeName ?? '',
-      from: params.from,
-      to: [],
-      messageType: 'ContextUpdate',
-      payload: Buffer.from(JSON.stringify(params.context), 'utf8'),
-      payloadDescriptor: params.context
-    });
+    const cloned = { ...executionRequest };
+    if (overrides?.tags) {
+      cloned.execution = { ...cloned.execution, tags: overrides.tags };
+    }
+    if (overrides?.context) {
+      cloned.session = { ...cloned.session, context: overrides.context };
+    }
+    // Clear idempotency key so clone creates a new run
+    if (cloned.execution) {
+      delete (cloned.execution as any).idempotencyKey;
+    }
 
-    await this.eventService.emitControlPlaneEvents(runId, [
-      {
-        ts: new Date().toISOString(),
-        type: 'message.sent',
-        source: { kind: 'control-plane', name: 'run-executor' },
-        subject: { kind: 'message', id: sendResult.envelope.messageId },
-        data: {
-          sessionId: run.runtimeSessionId,
-          sender: params.from,
-          messageType: 'ContextUpdate',
-          payloadDescriptor: params.context
-        }
-      }
-    ]);
-
-    return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
+    return this.launch(cloned);
   }
 
   private async execute(runId: string, request: ExecutionRequest): Promise<void> {
@@ -152,7 +144,7 @@ export class RunExecutorService {
     try {
       await this.runManager.markStarted(runId, request);
 
-      // Phase 1.4: Mode validation
+      // Mode validation via Initialize
       const initResult = await this.traceService.withSpan(
         'runtime.initialize',
         {
@@ -162,7 +154,7 @@ export class RunExecutorService {
         },
         async () => {
           return provider.initialize(
-            { clientName: 'macp-control-plane', clientVersion: '0.1.0' },
+            { clientName: 'macp-control-plane', clientVersion: '0.2.0' },
             { deadline: new Date(Date.now() + deadlineMs) }
           );
         }
@@ -179,66 +171,76 @@ export class RunExecutorService {
         );
       }
 
+      // Open unified bidirectional session stream
+      const handle = provider.openSession({ runId, execution: request });
+
+      // Wait for SessionStart confirmation
       const session = await this.traceService.withSpan(
-        'runtime.start_session',
+        'runtime.open_session',
         {
           run_id: runId,
           runtime_kind: request.runtime.kind,
           mode_name: request.session.modeName
         },
-        async () => provider.startSession(
-          { runId, execution: request },
-          { deadline: new Date(Date.now() + deadlineMs) }
-        )
+        async () => handle.sessionAck
       );
 
       await this.runManager.bindSession(runId, request, session);
 
+      // Send kickoff messages through the bidirectional stream
       for (const message of request.kickoff ?? []) {
         try {
           const payload = message.payloadEnvelope
             ? this.protoRegistry.encodePayloadEnvelope(message.payloadEnvelope)
             : Buffer.from(JSON.stringify(message.payload ?? {}), 'utf8');
 
-          // Phase 1.5: Kickoff message retry with exponential backoff
-          const sendResult = await this.retryKickoff(() =>
-            this.traceService.withSpan(
-              'runtime.send_kickoff',
-              {
-                run_id: runId,
-                runtime_kind: request.runtime.kind,
-                mode_name: request.session.modeName,
-                message_type: message.messageType,
-                sender: message.from
+          const kickoffEnvelope = {
+            macpVersion: '1.0',
+            mode: request.session.modeName,
+            messageType: message.messageType,
+            messageId: randomUUID(),
+            sessionId: session.runtimeSessionId,
+            sender: message.from,
+            timestampUnixMs: Date.now(),
+            payload
+          };
+
+          // Retry kickoff send through the stream handle
+          await this.retryKickoff(async () => {
+            handle.send(kickoffEnvelope);
+            return {
+              ack: {
+                ok: true,
+                duplicate: false,
+                messageId: kickoffEnvelope.messageId,
+                sessionId: session.runtimeSessionId,
+                acceptedAtUnixMs: Date.now(),
+                sessionState: 'SESSION_STATE_OPEN' as const
               },
-              async () =>
-                provider.send({
-                  runId,
-                  runtimeSessionId: session.runtimeSessionId,
-                  modeName: request.session.modeName,
-                  from: message.from,
-                  to: message.to,
-                  messageType: message.messageType,
-                  payload,
-                  payloadDescriptor: (message.payloadEnvelope as unknown as Record<string, unknown>) ?? message.payload,
-                  metadata: message.metadata
-                })
-            )
-          );
+              envelope: kickoffEnvelope
+            };
+          });
 
           await this.eventService.emitControlPlaneEvents(runId, [
             {
               ts: new Date().toISOString(),
               type: 'message.sent',
               source: { kind: 'control-plane', name: 'run-executor' },
-              subject: { kind: 'message', id: sendResult.envelope.messageId },
+              subject: { kind: 'message', id: kickoffEnvelope.messageId },
               data: {
                 sessionId: session.runtimeSessionId,
                 sender: message.from,
                 to: message.to,
                 messageType: message.messageType,
                 kind: message.kind,
-                ack: sendResult.ack,
+                ack: {
+                  ok: true,
+                  duplicate: false,
+                  messageId: kickoffEnvelope.messageId,
+                  sessionId: session.runtimeSessionId,
+                  acceptedAtUnixMs: Date.now(),
+                  sessionState: 'SESSION_STATE_OPEN'
+                },
                 payloadDescriptor: (message.payloadEnvelope as unknown as Record<string, unknown>) ?? message.payload ?? {}
               }
             }
@@ -262,20 +264,26 @@ export class RunExecutorService {
               }
             }
           ]);
+          handle.abort();
           await this.runManager.markFailed(runId, kickoffError);
           return;
         }
       }
 
+      // Half-close the write side — kickoff phase done
+      handle.closeWrite();
+
       const run = await this.runManager.markRunning(runId, session.runtimeSessionId);
       const subscriberId = session.initiator;
 
+      // Pass the session handle to the stream consumer
       await this.streamConsumer.start({
         runId,
         execution: request,
         runtimeKind: request.runtime.kind,
         runtimeSessionId: session.runtimeSessionId,
-        subscriberId
+        subscriberId,
+        sessionHandle: handle
       });
 
       if (run.traceId) {

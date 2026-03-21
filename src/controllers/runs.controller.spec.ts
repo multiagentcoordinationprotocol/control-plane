@@ -12,12 +12,13 @@ describe('RunsController', () => {
     launch: jest.Mock;
     cancel: jest.Mock;
     sendSignal: jest.Mock;
-    updateContext: jest.Mock;
   };
   let mockRunManager: {
     listRuns: jest.Mock;
     getRun: jest.Mock;
     getState: jest.Mock;
+    deleteRun: jest.Mock;
+    archiveRun: jest.Mock;
   };
   let mockEventRepository: {
     listCanonicalByRun: jest.Mock;
@@ -31,12 +32,13 @@ describe('RunsController', () => {
       launch: jest.fn(),
       cancel: jest.fn(),
       sendSignal: jest.fn(),
-      updateContext: jest.fn(),
     };
     mockRunManager = {
       listRuns: jest.fn(),
       getRun: jest.fn(),
       getState: jest.fn(),
+      deleteRun: jest.fn(),
+      archiveRun: jest.fn(),
     };
     mockEventRepository = {
       listCanonicalByRun: jest.fn(),
@@ -85,6 +87,7 @@ describe('RunsController', () => {
         offset: 0,
         sortBy: 'createdAt',
         sortOrder: 'desc',
+        includeArchived: undefined,
       });
     });
 
@@ -246,22 +249,4 @@ describe('RunsController', () => {
     });
   });
 
-  // ===========================================================================
-  // updateContext
-  // ===========================================================================
-  describe('updateContext', () => {
-    it('delegates to runExecutor.updateContext', async () => {
-      const contextResult = { messageId: 'msg-2', ack: { ok: true } };
-      mockRunExecutor.updateContext.mockResolvedValue(contextResult);
-
-      const body = {
-        from: 'agent-1',
-        context: { key: 'value' },
-      };
-      const result = await controller.updateContext('run-1', body as any);
-
-      expect(mockRunExecutor.updateContext).toHaveBeenCalledWith('run-1', body);
-      expect(result).toEqual(contextResult);
-    });
-  });
 });

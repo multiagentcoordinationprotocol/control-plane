@@ -11,10 +11,12 @@ import {
   RuntimeInitializeResult,
   RuntimeManifestResult,
   RuntimeModeDescriptor,
+  RuntimeOpenSessionRequest,
   RuntimeProvider,
   RuntimeRootDescriptor,
   RuntimeSendRequest,
   RuntimeSendResult,
+  RuntimeSessionHandle,
   RuntimeSessionSnapshot,
   RuntimeStartSessionRequest,
   RuntimeStartSessionResult,
@@ -31,6 +33,48 @@ export class MockRuntimeProvider implements RuntimeProvider {
       selectedProtocolVersion: '1.0',
       runtimeInfo: { name: 'mock-runtime', version: '0.0.1' },
       supportedModes: ['mock-decision', 'mock-task']
+    };
+  }
+
+  openSession(req: RuntimeOpenSessionRequest): RuntimeSessionHandle {
+    const sessionId = randomUUID();
+    const initiator = req.execution.session.participants[0]?.id ?? 'mock-initiator';
+    const ack = this.makeAck(sessionId);
+
+    const events: AsyncIterable<RawRuntimeEvent> = {
+      [Symbol.asyncIterator]() {
+        let done = false;
+        return {
+          async next(): Promise<IteratorResult<RawRuntimeEvent>> {
+            if (done) return { done: true, value: undefined };
+            done = true;
+            return {
+              done: false,
+              value: {
+                kind: 'stream-status',
+                receivedAt: new Date().toISOString(),
+                streamStatus: { status: 'opened' }
+              }
+            };
+          },
+          async return(): Promise<IteratorResult<RawRuntimeEvent>> {
+            done = true;
+            return { done: true, value: undefined };
+          }
+        };
+      }
+    };
+
+    return {
+      send: () => { /* no-op */ },
+      events,
+      closeWrite: () => { /* no-op */ },
+      abort: () => { /* no-op */ },
+      sessionAck: Promise.resolve({
+        runtimeSessionId: sessionId,
+        initiator,
+        ack
+      })
     };
   }
 

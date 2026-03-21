@@ -4,7 +4,7 @@ import { CanonicalEvent } from '../contracts/control-plane';
 import { RawRuntimeEvent } from '../contracts/runtime';
 import { DatabaseService } from '../db/database.service';
 import { MetricsService } from '../metrics/metrics.service';
-import { ProjectionService } from '../projection/projection.service';
+import { ProjectionService, PROJECTION_SCHEMA_VERSION } from '../projection/projection.service';
 import { EventRepository } from '../storage/event.repository';
 import { RunRepository } from '../storage/run.repository';
 import { StreamHubService } from './stream-hub.service';
@@ -32,7 +32,8 @@ export class RunEventService {
         ...event,
         id: randomUUID(),
         runId,
-        seq: startSeq + index
+        seq: startSeq + index,
+        schemaVersion: PROJECTION_SCHEMA_VERSION
       }));
       await this.eventRepository.appendCanonical(prepared, tx);
       return prepared;

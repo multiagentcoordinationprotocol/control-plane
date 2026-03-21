@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class ExportRunQueryDto {
@@ -22,4 +22,9 @@ export class ExportRunQueryDto {
   @Max(50000)
   @Transform(({ value }) => (value !== undefined ? Number(value) : undefined))
   eventLimit?: number;
+
+  @ApiPropertyOptional({ description: 'Export format: json or jsonl.', default: 'json', enum: ['json', 'jsonl'] })
+  @IsOptional()
+  @IsString()
+  format?: 'json' | 'jsonl';
 }

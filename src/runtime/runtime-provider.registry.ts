@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { RuntimeProvider } from '../contracts/runtime';
+import { RuntimeCapabilities, RuntimeProvider } from '../contracts/runtime';
 import { RustRuntimeProvider } from './rust-runtime.provider';
 
 @Injectable()
 export class RuntimeProviderRegistry {
   private readonly providers = new Map<string, RuntimeProvider>();
+  private readonly capabilities = new Map<string, RuntimeCapabilities>();
 
   constructor(private readonly rustProvider: RustRuntimeProvider) {
     this.register(rustProvider);
@@ -20,6 +21,14 @@ export class RuntimeProviderRegistry {
       throw new NotFoundException(`runtime provider '${kind}' is not registered`);
     }
     return provider;
+  }
+
+  setCapabilities(kind: string, caps: RuntimeCapabilities): void {
+    this.capabilities.set(kind, caps);
+  }
+
+  getCapabilities(kind: string): RuntimeCapabilities | undefined {
+    return this.capabilities.get(kind);
   }
 
   listKinds(): string[] {

@@ -5,6 +5,7 @@ export type CircuitBreakerState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
 export interface CircuitBreakerConfig {
   failureThreshold: number;
   resetTimeoutMs: number;
+  onStateChange?: (state: CircuitBreakerState, event: 'success' | 'failure') => void;
 }
 
 export class CircuitBreaker {
@@ -49,6 +50,7 @@ export class CircuitBreaker {
     }
     this.failureCount = 0;
     this.state = 'CLOSED';
+    this.config.onStateChange?.(this.state, 'success');
   }
 
   private onFailure(): void {
@@ -61,5 +63,12 @@ export class CircuitBreaker {
         `Circuit breaker OPEN after ${this.failureCount} failures (reset in ${this.config.resetTimeoutMs}ms)`
       );
     }
+    this.config.onStateChange?.(this.state, 'failure');
+  }
+
+  reset(): void {
+    this.failureCount = 0;
+    this.state = 'CLOSED';
+    this.logger.log('Circuit breaker manually reset to CLOSED');
   }
 }

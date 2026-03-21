@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ExecutionRequest } from '../contracts/control-plane';
-import { RawRuntimeEvent } from '../contracts/runtime';
+import { RawRuntimeEvent, RuntimeSessionHandle } from '../contracts/runtime';
 import { AppConfigService } from '../config/app-config.service';
 import { EventNormalizerService } from '../events/event-normalizer.service';
 import { RunEventService } from '../events/run-event.service';
@@ -12,6 +12,7 @@ import { RunManagerService } from './run-manager.service';
 interface ActiveStream {
   aborted: boolean;
   finalized: boolean;
+  connected: boolean;
   lastProcessedSeq: number;
 }
 
@@ -44,11 +45,13 @@ export class StreamConsumerService implements OnModuleDestroy {
     runtimeSessionId: string;
     subscriberId: string;
     resumeFromSeq?: number;
+    sessionHandle?: RuntimeSessionHandle;
   }): Promise<void> {
     if (this.active.has(params.runId)) return;
     const marker: ActiveStream = {
       aborted: false,
       finalized: false,
+      connected: false,
       lastProcessedSeq: params.resumeFromSeq ?? 0
     };
     this.active.set(params.runId, marker);
@@ -63,6 +66,10 @@ export class StreamConsumerService implements OnModuleDestroy {
   }
 
   isHealthy(): boolean {
+    if (this.active.size === 0) return true;
+    for (const [, marker] of this.active) {
+      if (!marker.aborted && !marker.finalized && !marker.connected) return false;
+    }
     return true;
   }
 
@@ -99,6 +106,7 @@ export class StreamConsumerService implements OnModuleDestroy {
       runtimeKind: string;
       runtimeSessionId: string;
       subscriberId: string;
+      sessionHandle?: RuntimeSessionHandle;
     }
   ): Promise<void> {
     const provider = this.runtimeRegistry.get(params.runtimeKind);
@@ -110,15 +118,21 @@ export class StreamConsumerService implements OnModuleDestroy {
 
     let retries = 0;
     const maxRetries = this.config.streamMaxRetries;
+    let isFirstIteration = true;
 
     while (!marker.aborted) {
       try {
-        const iterable = provider.streamSession({
-          runId: params.runId,
-          runtimeSessionId: params.runtimeSessionId,
-          modeName: params.execution.session.modeName,
-          subscriberId: params.subscriberId
-        });
+        // First iteration: use the session handle's events if provided
+        // Subsequent iterations (reconnection): fall back to streamSession()
+        const iterable = (isFirstIteration && params.sessionHandle)
+          ? params.sessionHandle.events
+          : provider.streamSession({
+              runId: params.runId,
+              runtimeSessionId: params.runtimeSessionId,
+              modeName: params.execution.session.modeName,
+              subscriberId: params.subscriberId
+            });
+        isFirstIteration = false;
 
         for await (const raw of this.withIdleTimeout(iterable, this.config.streamIdleTimeoutMs)) {
           if (marker.aborted) return;
@@ -167,6 +181,7 @@ export class StreamConsumerService implements OnModuleDestroy {
         ]);
         await new Promise((resolve) => setTimeout(resolve, this.backoffMs(retries)));
       } catch (error) {
+        marker.connected = false;
         retries += 1;
         this.logger.warn(`stream error for run ${params.runId}: ${error instanceof Error ? error.message : String(error)}`);
         await this.eventService.emitControlPlaneEvents(params.runId, [
@@ -251,6 +266,11 @@ export class StreamConsumerService implements OnModuleDestroy {
     runtimeSessionId: string,
     marker: ActiveStream
   ) {
+    // Track stream connectivity
+    if (raw.kind === 'stream-status' && raw.streamStatus?.status === 'opened') {
+      marker.connected = true;
+    }
+
     const canonical = this.normalizer.normalize(runId, raw, context);
     const emitted = await this.eventService.persistRawAndCanonical(runId, raw, canonical);
 

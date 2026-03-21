@@ -54,6 +54,7 @@ export const runtimeSessions = pgTable(
     policyVersion: varchar('policy_version', { length: 128 }),
     initiatorParticipantId: varchar('initiator_participant_id', { length: 255 }),
     sessionState: varchar('session_state', { length: 64 }).notNull().default('SESSION_STATE_UNSPECIFIED'),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'string' }),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -189,5 +190,21 @@ export const runMetrics = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.runId] })
+  })
+);
+
+export const webhooks = pgTable(
+  'webhooks',
+  {
+    id: uuid('id').primaryKey(),
+    url: text('url').notNull(),
+    events: jsonb('events').$type<string[]>().notNull().default([]),
+    secret: varchar('secret', { length: 255 }).notNull(),
+    active: integer('active').notNull().default(1),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
+  },
+  (table) => ({
+    activeIdx: index('webhooks_active_idx').on(table.active)
   })
 );

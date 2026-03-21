@@ -165,12 +165,48 @@ export interface RuntimeCallOptions {
   deadline?: Date;
 }
 
+/** Request to open a unified bidirectional session stream */
+export interface RuntimeOpenSessionRequest {
+  runId: string;
+  execution: ExecutionRequest;
+}
+
+/** Handle to an open bidirectional StreamSession */
+export interface RuntimeSessionHandle {
+  /** Send an envelope through the open stream */
+  send(envelope: RuntimeEnvelope): void;
+  /** Async iterable of raw events from the stream */
+  events: AsyncIterable<RawRuntimeEvent>;
+  /** Close the write side (after all kickoff messages sent) */
+  closeWrite(): void;
+  /** Abort the stream immediately */
+  abort(): void;
+  /** The ack derived from the SessionStart echo (resolved after first response) */
+  sessionAck: Promise<RuntimeStartSessionResult>;
+}
+
+/** Stored runtime capabilities from Initialize response */
+export interface RuntimeCapabilities {
+  sessions?: { stream?: boolean };
+  cancellation?: { cancelSession?: boolean };
+  progress?: { progress?: boolean };
+  manifest?: { getManifest?: boolean };
+  modeRegistry?: { listModes?: boolean; listChanged?: boolean };
+  roots?: { listRoots?: boolean; listChanged?: boolean };
+}
+
 export interface RuntimeProvider {
   readonly kind: string;
 
   initialize(req: RuntimeInitializeRequest, opts?: RuntimeCallOptions): Promise<RuntimeInitializeResult>;
+
+  /** Open a unified bidirectional session — replaces startSession() + streamSession() */
+  openSession(req: RuntimeOpenSessionRequest): RuntimeSessionHandle;
+
+  /** @deprecated Use openSession() for new session creation. Kept for backward compat. */
   startSession(req: RuntimeStartSessionRequest, opts?: RuntimeCallOptions): Promise<RuntimeStartSessionResult>;
   send(req: RuntimeSendRequest): Promise<RuntimeSendResult>;
+  /** @deprecated Use openSession().events for streaming. Kept for reconnection fallback. */
   streamSession(req: RuntimeStreamSessionRequest): AsyncIterable<RawRuntimeEvent>;
   getSession(req: RuntimeGetSessionRequest): Promise<RuntimeSessionSnapshot>;
   cancelSession(req: RuntimeCancelSessionRequest): Promise<RuntimeCancelResult>;
