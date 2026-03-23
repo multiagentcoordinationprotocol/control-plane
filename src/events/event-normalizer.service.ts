@@ -190,7 +190,8 @@ export class EventNormalizerService implements EventNormalizer {
         'TaskFail',
         'HandoffContext',
         'HandoffAccept',
-        'HandoffDecline'
+        'HandoffDecline',
+        'Contribute'
       ].includes(messageType)
     ) {
       return 'proposal.updated';

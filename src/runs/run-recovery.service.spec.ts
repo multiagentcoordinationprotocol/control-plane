@@ -106,7 +106,8 @@ describe('RunRecoveryService', () => {
         runId: 'run-1',
         runtimeSessionId: 'sess-1',
         subscriberId: 'agent-1',
-        resumeFromSeq: 42
+        resumeFromSeq: 42,
+        pollOnly: true
       })
     );
   });

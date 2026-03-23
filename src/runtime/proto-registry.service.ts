@@ -42,6 +42,9 @@ const MESSAGE_TYPE_MAP: Record<string, Record<string, string>> = {
     Approve: 'macp.modes.quorum.v1.ApprovePayload',
     Reject: 'macp.modes.quorum.v1.RejectPayload',
     Abstain: 'macp.modes.quorum.v1.AbstainPayload'
+  },
+  'ext.multi_round.v1': {
+    Contribute: '__json__'
   }
 };
 
@@ -73,6 +76,7 @@ export class ProtoRegistryService implements OnModuleInit {
     const missingTypes: string[] = [];
     for (const [mode, types] of Object.entries(MESSAGE_TYPE_MAP)) {
       for (const [msgType, typeName] of Object.entries(types)) {
+        if (typeName === '__json__') continue; // Extension modes use JSON, no proto type
         try {
           this.root.lookupType(typeName);
         } catch {
@@ -118,6 +122,10 @@ export class ProtoRegistryService implements OnModuleInit {
     const typeName =
       MESSAGE_TYPE_MAP[modeName]?.[messageType] ?? MESSAGE_TYPE_MAP.__core__[messageType];
     if (!typeName) {
+      return this.tryDecodeUtf8(payload);
+    }
+    // Extension modes using JSON payloads (no proto definition)
+    if (typeName === '__json__') {
       return this.tryDecodeUtf8(payload);
     }
     return this.decodeMessage(typeName, payload);

@@ -53,8 +53,10 @@ export class AppConfigService implements OnModuleInit {
   readonly runtimeUseDevHeader = readBoolean('RUNTIME_USE_DEV_HEADER', process.env.NODE_ENV === 'development');
   readonly runtimeRequestTimeoutMs = readNumber('RUNTIME_REQUEST_TIMEOUT_MS', 30000);
   readonly runtimeDevAgentId = process.env.RUNTIME_DEV_AGENT_ID ?? 'control-plane';
+  /** @deprecated SessionWatch is no longer part of the base protocol. Kept for backward compat. */
   readonly runtimeStreamSubscriptionMessageType =
     process.env.RUNTIME_STREAM_SUBSCRIPTION_MESSAGE_TYPE ?? 'SessionWatch';
+  /** @deprecated SessionWatch is no longer part of the base protocol. Kept for backward compat. */
   readonly runtimeStreamSubscriberId =
     process.env.RUNTIME_STREAM_SUBSCRIBER_ID ?? this.runtimeDevAgentId;
 
