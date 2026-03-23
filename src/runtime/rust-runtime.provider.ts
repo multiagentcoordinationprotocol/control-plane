@@ -103,8 +103,8 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         cancellation: { cancelSession: true },
         progress: { progress: true },
         manifest: { getManifest: true },
-        modeRegistry: { listModes: true, listChanged: false },
-        roots: { listRoots: true, listChanged: false },
+        modeRegistry: { listModes: true, listChanged: true },
+        roots: { listRoots: true, listChanged: true },
         experimental: { features: {} }
       }
     }, undefined, opts);
@@ -119,6 +119,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
         websiteUrl: response.runtimeInfo?.websiteUrl
       },
       supportedModes: response.supportedModes ?? [],
+      instructions: response.instructions || undefined,
       capabilities: response.capabilities ? {
         sessions: response.capabilities.sessions,
         cancellation: response.capabilities.cancellation,
@@ -173,6 +174,13 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
     const ack = this.fromAck(response.ack);
     if (!ack.ok && ack.error) {
+      if (ack.error.code === 'INVALID_SESSION_ID') {
+        throw new AppException(
+          ErrorCode.INVALID_SESSION_ID,
+          `Runtime rejected SessionStart: [${ack.error.code}] ${ack.error.message}`,
+          400
+        );
+      }
       throw new AppException(
         ErrorCode.RUNTIME_UNAVAILABLE,
         `Runtime rejected SessionStart: [${ack.error.code}] ${ack.error.message}`,
@@ -210,7 +218,7 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
       messageType: 'SessionStart',
       messageId: randomUUID(),
       sessionId: runtimeSessionId,
-      sender: initiator,
+      sender: '',
       payload
     });
 
@@ -414,6 +422,13 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
 
     const ack = this.fromAck(response.ack);
     if (!ack.ok && ack.error) {
+      if (ack.error.code === 'INVALID_SESSION_ID') {
+        throw new AppException(
+          ErrorCode.INVALID_SESSION_ID,
+          `Runtime rejected message: [${ack.error.code}] ${ack.error.message}`,
+          400
+        );
+      }
       throw new AppException(
         ErrorCode.RUNTIME_UNAVAILABLE,
         `Runtime rejected message: [${ack.error.code}] ${ack.error.message}`,
@@ -423,86 +438,14 @@ export class RustRuntimeProvider implements RuntimeProvider, OnModuleInit {
     return { ack, envelope };
   }
 
-  async *streamSession(req: RuntimeStreamSessionRequest): AsyncIterable<RawRuntimeEvent> {
-    const creds = await this.credentialResolver.resolve({
-      runtimeKind: this.kind,
-      fallbackSender: req.subscriberId || this.config.runtimeStreamSubscriberId
-    });
-    const metadata = this.buildMetadata(creds.metadata);
-    const streamMethod = this.getClientMethod('StreamSession');
-    const call = streamMethod.call(this.client, metadata);
-
-    // Phase 1.6: Event-driven async queue instead of 50ms polling
-    const buffer: RawRuntimeEvent[] = [];
-    let resolve: (() => void) | null = null;
-    let ended = false;
-    let failure: Error | null = null;
-
-    const notify = () => {
-      if (resolve) {
-        const r = resolve;
-        resolve = null;
-        r();
-      }
-    };
-
-    const waitForItem = (): Promise<void> =>
-      new Promise<void>((r) => {
-        if (buffer.length > 0 || ended) {
-          r();
-        } else {
-          resolve = r;
-        }
-      });
-
-    call.on('data', (chunk: any) => {
-      buffer.push({
-        kind: 'stream-envelope',
-        receivedAt: new Date().toISOString(),
-        envelope: this.fromEnvelope(chunk.envelope)
-      });
-      notify();
-    });
-    call.on('error', (error: Error) => {
-      failure = error;
-      ended = true;
-      notify();
-    });
-    call.on('end', () => {
-      ended = true;
-      notify();
-    });
-
-    const subscriptionEnvelope = this.buildEnvelope({
-      mode: req.modeName,
-      messageType: this.config.runtimeStreamSubscriptionMessageType,
-      messageId: randomUUID(),
-      sessionId: req.runtimeSessionId,
-      sender: creds.sender,
-      payload: Buffer.from(JSON.stringify({ sessionId: req.runtimeSessionId }), 'utf8')
-    });
-    call.write({ envelope: this.toGrpcEnvelope(subscriptionEnvelope) });
-    call.end();
-
-    // Yield the initial stream-opened event
-    yield {
-      kind: 'stream-status',
-      receivedAt: new Date().toISOString(),
-      streamStatus: { status: 'opened' }
-    };
-
-    while (true) {
-      await waitForItem();
-      while (buffer.length > 0) {
-        yield buffer.shift()!;
-      }
-      if (ended && buffer.length === 0) break;
-    }
-
-    if (failure) {
-      this.logger.warn(`streamSession ended with error for ${req.runtimeSessionId}: ${(failure as Error).message}`);
-      throw failure;
-    }
+  async *streamSession(_req: RuntimeStreamSessionRequest): AsyncIterable<RawRuntimeEvent> {
+    // SessionWatch / passive attach is no longer part of the base protocol.
+    // Reconnection now uses getSession() polling in StreamConsumerService.
+    throw new AppException(
+      ErrorCode.INTERNAL_ERROR,
+      'streamSession() is deprecated — reconnection uses getSession() polling',
+      500
+    );
   }
 
   async getSession(req: RuntimeGetSessionRequest): Promise<RuntimeSessionSnapshot> {

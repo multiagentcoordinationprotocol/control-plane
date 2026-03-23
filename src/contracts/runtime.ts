@@ -65,6 +65,7 @@ export interface RuntimeInitializeResult {
   };
   supportedModes: string[];
   capabilities?: RuntimeCapabilities;
+  instructions?: string;
 }
 
 export interface RuntimeStartSessionRequest {

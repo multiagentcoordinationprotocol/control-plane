@@ -47,6 +47,7 @@ export class StreamConsumerService implements OnModuleDestroy {
     subscriberId: string;
     resumeFromSeq?: number;
     sessionHandle?: RuntimeSessionHandle;
+    pollOnly?: boolean;
   }): Promise<void> {
     if (this.active.has(params.runId)) return;
     const marker: ActiveStream = {
@@ -116,6 +117,7 @@ export class StreamConsumerService implements OnModuleDestroy {
       runtimeSessionId: string;
       subscriberId: string;
       sessionHandle?: RuntimeSessionHandle;
+      pollOnly?: boolean;
     }
   ): Promise<void> {
     const provider = this.runtimeRegistry.get(params.runtimeKind);
@@ -125,31 +127,29 @@ export class StreamConsumerService implements OnModuleDestroy {
       runtimeSessionId: params.runtimeSessionId
     };
 
-    let retries = 0;
     const maxRetries = this.config.streamMaxRetries;
-    let isFirstIteration = true;
 
-    while (!marker.aborted) {
+    // If we have a session handle and not poll-only, consume the stream first
+    if (params.sessionHandle && !params.pollOnly) {
       try {
-        // First iteration: use the session handle's events if provided
-        // Subsequent iterations (reconnection): fall back to streamSession()
-        const iterable = (isFirstIteration && params.sessionHandle)
-          ? params.sessionHandle.events
-          : provider.streamSession({
-              runId: params.runId,
-              runtimeSessionId: params.runtimeSessionId,
-              modeName: params.execution.session.modeName,
-              subscriberId: params.subscriberId
-            });
-        isFirstIteration = false;
-
-        for await (const raw of this.withIdleTimeout(iterable, this.config.streamIdleTimeoutMs)) {
+        for await (const raw of this.withIdleTimeout(params.sessionHandle.events, this.config.streamIdleTimeoutMs)) {
           if (marker.aborted) return;
           await this.handleRawEvent(params.runId, raw, context, params.runtimeSessionId, marker);
           if (marker.finalized) return;
-          retries = 0;
         }
+      } catch (error) {
+        marker.connected = false;
+        this.logger.warn(`stream error for run ${params.runId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
 
+      // Stream ended — check if already finalized
+      if (marker.finalized || marker.aborted) return;
+    }
+
+    // Polling fallback: poll getSession() until terminal state or max retries
+    let retries = 0;
+    while (!marker.aborted && !marker.finalized) {
+      try {
         const snapshot = await provider.getSession({
           runId: params.runId,
           runtimeSessionId: params.runtimeSessionId,
@@ -172,72 +172,28 @@ export class StreamConsumerService implements OnModuleDestroy {
           await this.finalizeRun(params.runId, marker, 'failed', new Error('runtime session expired'));
           return;
         }
-
-        retries += 1;
-        if (retries > maxRetries) {
-          await this.finalizeRun(params.runId, marker, 'failed', new Error('stream ended without terminal session state'));
-          return;
-        }
-
-        await this.eventService.emitControlPlaneEvents(params.runId, [
-          {
-            ts: new Date().toISOString(),
-            type: 'session.stream.opened',
-            source: { kind: 'control-plane', name: 'stream-consumer' },
-            subject: { kind: 'session', id: params.runtimeSessionId },
-            data: { status: 'reconnecting', detail: 'stream ended before terminal state; retrying' }
-          }
-        ]);
-        await new Promise((resolve) => setTimeout(resolve, this.backoffMs(retries)));
-      } catch (error) {
-        marker.connected = false;
-        retries += 1;
-        this.logger.warn(`stream error for run ${params.runId}: ${error instanceof Error ? error.message : String(error)}`);
-        await this.eventService.emitControlPlaneEvents(params.runId, [
-          {
-            ts: new Date().toISOString(),
-            type: 'session.stream.opened',
-            source: { kind: 'control-plane', name: 'stream-consumer' },
-            subject: { kind: 'session', id: params.runtimeSessionId },
-            data: { status: 'reconnecting', detail: error instanceof Error ? error.message : String(error) }
-          }
-        ]);
-
-        if (retries > maxRetries) {
-          await this.finalizeRun(params.runId, marker, 'failed', error);
-          return;
-        }
-
-        try {
-          const snapshot = await provider.getSession({
-            runId: params.runId,
-            runtimeSessionId: params.runtimeSessionId,
-            requesterId: params.subscriberId
-          });
-          await this.handleRawEvent(
-            params.runId,
-            { kind: 'session-snapshot', receivedAt: new Date().toISOString(), sessionSnapshot: snapshot },
-            context,
-            params.runtimeSessionId,
-            marker
-          );
-          if (marker.finalized) return;
-          if (snapshot.state === 'SESSION_STATE_RESOLVED') {
-            await this.finalizeRun(params.runId, marker, 'completed');
-            return;
-          }
-          if (snapshot.state === 'SESSION_STATE_EXPIRED') {
-            await this.finalizeRun(params.runId, marker, 'failed', new Error('runtime session expired'));
-            return;
-          }
-        } catch (snapshotError) {
-          this.logger.warn(
-            `reconciliation failed for run ${params.runId}: ${snapshotError instanceof Error ? snapshotError.message : String(snapshotError)}`
-          );
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, this.backoffMs(retries)));
+      } catch (pollError) {
+        this.logger.warn(
+          `getSession poll failed for run ${params.runId}: ${pollError instanceof Error ? pollError.message : String(pollError)}`
+        );
       }
+
+      retries += 1;
+      if (retries > maxRetries) {
+        await this.finalizeRun(params.runId, marker, 'failed', new Error('polling exhausted without terminal session state'));
+        return;
+      }
+
+      await this.eventService.emitControlPlaneEvents(params.runId, [
+        {
+          ts: new Date().toISOString(),
+          type: 'session.stream.opened',
+          source: { kind: 'control-plane', name: 'stream-consumer' },
+          subject: { kind: 'session', id: params.runtimeSessionId },
+          data: { status: 'reconnecting', detail: 'polling getSession for terminal state' }
+        }
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, this.backoffMs(retries)));
     }
   }
 

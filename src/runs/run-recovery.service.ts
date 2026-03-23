@@ -123,7 +123,8 @@ export class RunRecoveryService implements OnApplicationBootstrap {
       runtimeKind: run.runtimeKind,
       runtimeSessionId,
       subscriberId,
-      resumeFromSeq
+      resumeFromSeq,
+      pollOnly: true
     });
 
     this.logger.log(`recovered run ${run.id} from seq ${run.lastEventSeq}`);

@@ -267,6 +267,10 @@ export class RunExecutorService {
         }
       );
 
+      if (initResult.instructions) {
+        this.logger.log(`runtime instructions: ${initResult.instructions}`);
+      }
+
       if (
         initResult.supportedModes.length > 0 &&
         !initResult.supportedModes.includes(request.session.modeName)

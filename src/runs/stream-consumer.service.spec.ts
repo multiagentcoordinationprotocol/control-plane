@@ -119,18 +119,8 @@ describe('StreamConsumerService', () => {
 
   describe('start()', () => {
     it('should be idempotent — second call returns immediately without starting a new loop', async () => {
-      // Create an async iterable that never resolves so the loop stays active
-      const neverEndingIterable: AsyncIterable<any> = {
-        [Symbol.asyncIterator]() {
-          return {
-            next: () => new Promise(() => {}), // never resolves
-          };
-        },
-      };
-
       const mockProvider = {
-        streamSession: jest.fn().mockReturnValue(neverEndingIterable),
-        getSession: jest.fn(),
+        getSession: jest.fn().mockReturnValue(new Promise(() => {})), // never resolves, keeps loop active
       };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
 
@@ -156,24 +146,15 @@ describe('StreamConsumerService', () => {
       // Second call should return immediately since 'run-1' is already active
       await service.start(params);
 
-      // streamSession should have been called only once (from the first start call)
-      expect(mockProvider.streamSession).toHaveBeenCalledTimes(1);
+      // getSession should have been called only once (from the first start call's poll loop)
+      expect(mockProvider.getSession).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('stop()', () => {
     it('should set the aborted flag on the active stream marker', async () => {
-      const neverEndingIterable: AsyncIterable<any> = {
-        [Symbol.asyncIterator]() {
-          return {
-            next: () => new Promise(() => {}),
-          };
-        },
-      };
-
       const mockProvider = {
-        streamSession: jest.fn().mockReturnValue(neverEndingIterable),
-        getSession: jest.fn(),
+        getSession: jest.fn().mockReturnValue(new Promise(() => {})),
       };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
 
@@ -214,17 +195,8 @@ describe('StreamConsumerService', () => {
 
   describe('onModuleDestroy()', () => {
     it('should abort all active streams', async () => {
-      const neverEndingIterable: AsyncIterable<any> = {
-        [Symbol.asyncIterator]() {
-          return {
-            next: () => new Promise(() => {}),
-          };
-        },
-      };
-
       const mockProvider = {
-        streamSession: jest.fn().mockReturnValue(neverEndingIterable),
-        getSession: jest.fn(),
+        getSession: jest.fn().mockReturnValue(new Promise(() => {})),
       };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
 
@@ -269,17 +241,8 @@ describe('StreamConsumerService', () => {
     });
 
     it('should return false when a stream is active but not connected', async () => {
-      const neverEndingIterable: AsyncIterable<any> = {
-        [Symbol.asyncIterator]() {
-          return {
-            next: () => new Promise(() => {}),
-          };
-        },
-      };
-
       const mockProvider = {
-        streamSession: jest.fn().mockReturnValue(neverEndingIterable),
-        getSession: jest.fn(),
+        getSession: jest.fn().mockReturnValue(new Promise(() => {})),
       };
       runtimeRegistry.get.mockReturnValue(mockProvider as any);
 
