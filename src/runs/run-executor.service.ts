@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { ExecutionRequest } from '../contracts/control-plane';
+import { ExecutionRequest, RunMessageInput } from '../contracts/control-plane';
 import { ArtifactService } from '../artifacts/artifact.service';
 import { AppConfigService } from '../config/app-config.service';
 import { RunEventService } from '../events/run-event.service';
@@ -122,6 +122,65 @@ export class RunExecutorService {
     await this.streamConsumer.stop(runId);
     this.streamHub.complete(runId);
     return cancelled;
+  }
+
+  async sendMessage(runId: string, params: RunMessageInput) {
+    const run = await this.runManager.getRun(runId);
+    if (!run.runtimeSessionId || !['binding_session', 'running'].includes(run.status)) {
+      throw new BadRequestException('run is not ready to accept session-bound messages');
+    }
+
+    const executionRequest = run.metadata?.executionRequest as ExecutionRequest | undefined;
+    const runtimeSession = await this.runtimeSessionRepository.findByRunId(runId);
+    const modeName = runtimeSession?.modeName ?? executionRequest?.session?.modeName;
+    if (!modeName) {
+      throw new BadRequestException('run does not have a bound mode name');
+    }
+
+    const provider = this.runtimeRegistry.get(run.runtimeKind);
+    const payload = params.payloadEnvelope
+      ? this.protoRegistry.encodePayloadEnvelope(params.payloadEnvelope)
+      : Buffer.from(JSON.stringify(params.payload ?? {}), 'utf8');
+
+    const sendResult = await provider.send({
+      runId,
+      runtimeSessionId: run.runtimeSessionId,
+      modeName,
+      from: params.from,
+      to: params.to ?? [],
+      messageType: params.messageType,
+      payload,
+      payloadDescriptor: (params.payloadEnvelope as unknown as Record<string, unknown>) ?? params.payload ?? {},
+      metadata: params.metadata
+    });
+
+    if (!sendResult.ack.ok && sendResult.ack.error) {
+      throw new AppException(
+        ErrorCode.MESSAGE_SEND_FAILED,
+        `Runtime rejected message: [${sendResult.ack.error.code}] ${sendResult.ack.error.message}`,
+        sendResult.ack.error.code === 'INVALID_SESSION_ID' ? 400 : 502
+      );
+    }
+
+    await this.eventService.emitControlPlaneEvents(runId, [
+      {
+        ts: new Date().toISOString(),
+        type: 'message.sent',
+        source: { kind: 'control-plane', name: 'run-executor' },
+        subject: { kind: 'message', id: sendResult.envelope.messageId },
+        data: {
+          sessionId: run.runtimeSessionId,
+          sender: params.from,
+          to: params.to ?? [],
+          messageType: params.messageType,
+          ack: sendResult.ack,
+          payloadDescriptor: (params.payloadEnvelope as unknown as Record<string, unknown>) ?? params.payload ?? {},
+          metadata: params.metadata ?? {}
+        }
+      }
+    ]);
+
+    return { messageId: sendResult.envelope.messageId, ack: sendResult.ack };
   }
 
   async sendSignal(runId: string, params: {

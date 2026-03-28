@@ -30,7 +30,7 @@ export interface ParticipantRef {
 
 export interface KickoffMessage {
   from: string;
-  to: string[];
+  to?: string[];
   kind: 'request' | 'broadcast' | 'proposal' | 'context';
   messageType: string;
   payload?: Record<string, unknown>;
@@ -41,6 +41,15 @@ export interface KickoffMessage {
 export interface ExecutionRequester {
   actorId?: string;
   actorType?: 'user' | 'service' | 'system';
+}
+
+export interface RunMessageInput {
+  from: string;
+  to?: string[];
+  messageType: string;
+  payload?: Record<string, unknown>;
+  payloadEnvelope?: PayloadEnvelopeInput;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ExecutionRequest {
