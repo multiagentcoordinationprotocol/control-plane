@@ -127,6 +127,30 @@ describe('ProtoRegistryService', () => {
       expect(result).toBeInstanceOf(Buffer);
     });
 
+    it('normalizes snake_case proto fields before encoding', () => {
+      service.encodePayloadEnvelope({
+        encoding: 'proto',
+        proto: {
+          typeName: 'macp.v1.SessionStartPayload',
+          value: {
+            mode_version: '1.0.0',
+            configuration_version: 'cfg-1',
+            policy_version: 'policy-1',
+            ttl_ms: 60000,
+            roots: [{ website_url: 'https://example.test' }]
+          }
+        }
+      });
+
+      expect(mockTypeInstance.fromObject).toHaveBeenCalledWith({
+        modeVersion: '1.0.0',
+        configurationVersion: 'cfg-1',
+        policyVersion: 'policy-1',
+        ttlMs: 60000,
+        roots: [{ websiteUrl: 'https://example.test' }]
+      });
+    });
+
     it('throws when proto input is missing proto value', () => {
       expect(() =>
         service.encodePayloadEnvelope({

@@ -29,6 +29,7 @@ import { ListEventsQueryDto } from '../dto/list-events-query.dto';
 import { ListRunsQueryDto } from '../dto/list-runs-query.dto';
 import { ReplayRequestDto } from '../dto/replay-request.dto';
 import { CloneRunDto } from '../dto/clone-run.dto';
+import { SendRunMessageDto } from '../dto/send-run-message.dto';
 import { SendSignalDto } from '../dto/send-signal.dto';
 import { StreamRunQueryDto } from '../dto/stream-run-query.dto';
 import { UpdateContextDto } from '../dto/update-context.dto';
@@ -273,6 +274,16 @@ export class RunsController {
     @Query('seq') seq?: string
   ) {
     return this.replayService.stateAt(id, seq ? Number(seq) : undefined);
+  }
+
+  @Post(':id/messages')
+  @ApiOperation({ summary: 'Send a session-bound MACP message to a running session.' })
+  @ApiBody({ type: SendRunMessageDto })
+  async sendMessage(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: SendRunMessageDto
+  ) {
+    return this.runExecutor.sendMessage(id, body);
   }
 
   @Post(':id/signal')

@@ -13,6 +13,7 @@ describe('RunsController', () => {
   let mockRunExecutor: {
     launch: jest.Mock;
     cancel: jest.Mock;
+    sendMessage: jest.Mock;
     sendSignal: jest.Mock;
     updateContext: jest.Mock;
   };
@@ -40,6 +41,7 @@ describe('RunsController', () => {
     mockRunExecutor = {
       launch: jest.fn(),
       cancel: jest.fn(),
+      sendMessage: jest.fn(),
       sendSignal: jest.fn(),
       updateContext: jest.fn(),
     };
@@ -243,6 +245,30 @@ describe('RunsController', () => {
       await controller.cancelRun('run-1', {});
 
       expect(mockRunExecutor.cancel).toHaveBeenCalledWith('run-1', undefined);
+    });
+  });
+
+  // ===========================================================================
+  // sendMessage
+  // ===========================================================================
+  describe('sendMessage', () => {
+    it('delegates to runExecutor.sendMessage', async () => {
+      const sendResult = { messageId: 'msg-1', ack: { ok: true } };
+      mockRunExecutor.sendMessage.mockResolvedValue(sendResult);
+
+      const body = {
+        from: 'agent-1',
+        to: ['agent-2'],
+        messageType: 'Evaluation',
+        payloadEnvelope: {
+          encoding: 'proto',
+          proto: { typeName: 'macp.modes.decision.v1.EvaluationPayload', value: { proposal_id: 'p1' } }
+        }
+      };
+      const result = await controller.sendMessage('run-1', body as any);
+
+      expect(mockRunExecutor.sendMessage).toHaveBeenCalledWith('run-1', body);
+      expect(result).toEqual(sendResult);
     });
   });
 

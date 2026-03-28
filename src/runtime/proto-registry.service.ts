@@ -114,8 +114,29 @@ export class ProtoRegistryService implements OnModuleInit {
 
   encodeMessage(typeName: string, value: Record<string, unknown>): Buffer {
     const type = this.lookupType(typeName);
-    const message = type.fromObject(value);
+    const normalized = this.normalizeProtoValue(value) as Record<string, unknown>;
+    const message = type.fromObject(normalized);
     return Buffer.from(type.encode(message).finish());
+  }
+
+  private normalizeProtoValue(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.normalizeProtoValue(item));
+    }
+
+    if (!value || typeof value !== 'object' || Buffer.isBuffer(value)) {
+      return value;
+    }
+
+    const normalized: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      const normalizedEntry = this.normalizeProtoValue(entry);
+      const normalizedKey = key.includes('_')
+        ? key.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase())
+        : key;
+      normalized[normalizedKey] = normalizedEntry;
+    }
+    return normalized;
   }
 
   decodeKnown(modeName: string, messageType: string, payload: Buffer): Record<string, unknown> | undefined {

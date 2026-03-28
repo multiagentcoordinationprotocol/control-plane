@@ -86,6 +86,7 @@ That behavior is isolated in `RustRuntimeProvider` so you can update it the mome
 - `GET /runs/:id/events`
 - `GET /runs/:id/stream` (SSE)
 - `POST /runs/:id/cancel`
+- `POST /runs/:id/messages` (send a session-bound MACP message into an active run)
 - `POST /runs/:id/replay`
 - `GET /runs/:id/replay/stream` (SSE)
 - `GET /runs/:id/replay/state`
