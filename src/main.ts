@@ -5,11 +5,16 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import * as express from 'express';
 import { AppModule } from './app.module';
 import { AppConfigService } from './config/app-config.service';
+import { runMigrations } from './db/migrate';
 import { GlobalExceptionFilter } from './errors/exception.filter';
 import { startTelemetry, stopTelemetry } from './telemetry/telemetry';
 
 async function bootstrap() {
   const config = new AppConfigService();
+
+  // Run database migrations before NestJS bootstraps
+  await runMigrations(config.databaseUrl);
+
   await startTelemetry({
     enabled: config.otelEnabled,
     serviceName: config.otelServiceName,

@@ -1,11 +1,13 @@
 /**
- * Standalone migration runner for production use.
+ * Programmatic migration runner.
  *
  * Reads SQL files from the drizzle/ directory and applies them in order,
  * tracking applied migrations in a `_migrations` table. This avoids
  * depending on drizzle-kit (a devDependency) at runtime.
  *
- * Usage: node dist/db/migrate.js
+ * Can be used as:
+ *   - Imported: `await runMigrations(databaseUrl)`
+ *   - Standalone: `node dist/db/migrate.js`
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -13,11 +15,7 @@ import { Client } from 'pg';
 
 const MIGRATIONS_TABLE = '_migrations';
 
-async function migrate(): Promise<void> {
-  const databaseUrl =
-    process.env.DATABASE_URL ??
-    'postgres://postgres:postgres@localhost:5432/macp_control_plane';
-
+export async function runMigrations(databaseUrl: string): Promise<void> {
   const migrationsDir = path.resolve(__dirname, '..', '..', 'drizzle');
 
   const client = new Client({ connectionString: databaseUrl });
@@ -83,7 +81,14 @@ async function migrate(): Promise<void> {
   }
 }
 
-migrate().catch((err) => {
-  console.error('Migration failed:', err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+// Allow standalone execution: node dist/db/migrate.js
+if (require.main === module) {
+  const databaseUrl =
+    process.env.DATABASE_URL ??
+    'postgres://postgres:postgres@localhost:5432/macp_control_plane';
+
+  runMigrations(databaseUrl).catch((err) => {
+    console.error('Migration failed:', err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}
