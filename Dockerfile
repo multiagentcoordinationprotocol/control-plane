@@ -24,7 +24,6 @@ RUN npm ci --ignore-scripts --omit=dev && npm cache clean --force
 COPY --from=builder /app/dist dist/
 COPY proto/ proto/
 COPY drizzle/ drizzle/
-COPY drizzle.config.ts ./
 
 USER appuser
 

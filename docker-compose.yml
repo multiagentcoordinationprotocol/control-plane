@@ -19,7 +19,7 @@ services:
 
   migrate:
     build: .
-    command: ['npx', 'drizzle-kit', 'migrate']
+    command: ['node', 'dist/db/migrate.js']
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/macp_control_plane
     depends_on:
