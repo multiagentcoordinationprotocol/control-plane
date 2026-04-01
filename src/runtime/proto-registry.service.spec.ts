@@ -17,13 +17,17 @@ class MockType {
 let mockTypeInstance: MockType;
 
 const mockLookupType = jest.fn().mockImplementation(() => mockTypeInstance);
-const mockLoadSync = jest.fn().mockReturnValue({ lookupType: mockLookupType });
+const mockLoadSync = jest.fn();
+
+class MockRoot {
+  resolvePath: any;
+  lookupType = mockLookupType;
+  loadSync = mockLoadSync;
+}
 
 jest.mock('protobufjs', () => {
   return {
-    get loadSync() {
-      return mockLoadSync;
-    },
+    Root: MockRoot,
     Type: MockType
   };
 });
@@ -38,7 +42,7 @@ describe('ProtoRegistryService', () => {
     mockTypeInstance = new MockType();
 
     mockLookupType.mockReset().mockImplementation(() => mockTypeInstance);
-    mockLoadSync.mockReset().mockReturnValue({ lookupType: mockLookupType });
+    mockLoadSync.mockReset();
 
     service = new ProtoRegistryService();
     // Invoke onModuleInit to load the (mocked) proto root

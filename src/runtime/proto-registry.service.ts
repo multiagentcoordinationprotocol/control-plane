@@ -55,18 +55,23 @@ export class ProtoRegistryService implements OnModuleInit {
 
   onModuleInit(): void {
     const repoRoot = path.resolve(__dirname, '..', '..');
+    const protoRoot = path.join(repoRoot, 'proto');
     const protoFiles = [
-      path.join(repoRoot, 'proto/macp/v1/core.proto'),
-      path.join(repoRoot, 'proto/macp/v1/envelope.proto'),
-      path.join(repoRoot, 'proto/macp/modes/decision/v1/decision.proto'),
-      path.join(repoRoot, 'proto/macp/modes/proposal/v1/proposal.proto'),
-      path.join(repoRoot, 'proto/macp/modes/task/v1/task.proto'),
-      path.join(repoRoot, 'proto/macp/modes/handoff/v1/handoff.proto'),
-      path.join(repoRoot, 'proto/macp/modes/quorum/v1/quorum.proto')
+      path.join(protoRoot, 'macp/v1/core.proto'),
+      path.join(protoRoot, 'macp/v1/envelope.proto'),
+      path.join(protoRoot, 'macp/modes/decision/v1/decision.proto'),
+      path.join(protoRoot, 'macp/modes/proposal/v1/proposal.proto'),
+      path.join(protoRoot, 'macp/modes/task/v1/task.proto'),
+      path.join(protoRoot, 'macp/modes/handoff/v1/handoff.proto'),
+      path.join(protoRoot, 'macp/modes/quorum/v1/quorum.proto')
     ];
 
     try {
-      this.root = protobuf.loadSync(protoFiles);
+      this.root = new protobuf.Root();
+      this.root.resolvePath = (_origin: string, target: string) => {
+        return path.isAbsolute(target) ? target : path.join(protoRoot, target);
+      };
+      this.root.loadSync(protoFiles);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`failed to load proto definitions: ${message}. Files: ${protoFiles.join(', ')}`);
