@@ -1,6 +1,7 @@
 import { RunInsightsController } from './run-insights.controller';
 import { RunInsightsService } from '../insights/run-insights.service';
 import { RunExecutorService } from '../runs/run-executor.service';
+import { RunManagerService } from '../runs/run-manager.service';
 
 describe('RunInsightsController', () => {
   let controller: RunInsightsController;
@@ -12,6 +13,10 @@ describe('RunInsightsController', () => {
   let mockRunExecutor: {
     cancel: jest.Mock;
   };
+  let mockRunManager: {
+    archiveRun: jest.Mock;
+    deleteRun: jest.Mock;
+  };
 
   beforeEach(() => {
     mockInsightsService = {
@@ -22,9 +27,14 @@ describe('RunInsightsController', () => {
     mockRunExecutor = {
       cancel: jest.fn()
     };
+    mockRunManager = {
+      archiveRun: jest.fn(),
+      deleteRun: jest.fn()
+    };
     controller = new RunInsightsController(
       mockInsightsService as unknown as RunInsightsService,
-      mockRunExecutor as unknown as RunExecutorService
+      mockRunExecutor as unknown as RunExecutorService,
+      mockRunManager as unknown as RunManagerService
     );
   });
 
@@ -115,6 +125,40 @@ describe('RunInsightsController', () => {
       expect(result).toEqual([bundle1, bundle2]);
       expect(mockInsightsService.exportRun).toHaveBeenCalledWith('run-1', { includeCanonical: true, includeRaw: false });
       expect(mockInsightsService.exportRun).toHaveBeenCalledWith('run-2', { includeCanonical: true, includeRaw: false });
+    });
+  });
+
+  describe('batchArchive', () => {
+    it('archives multiple runs and returns results', async () => {
+      mockRunManager.archiveRun
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('not found'));
+
+      const result = await controller.batchArchive({ runIds: ['run-1', 'run-2'] });
+
+      expect(result).toEqual([
+        { runId: 'run-1', status: 'archived', error: undefined },
+        { runId: 'run-2', status: 'failed', error: 'not found' }
+      ]);
+      expect(mockRunManager.archiveRun).toHaveBeenCalledWith('run-1');
+      expect(mockRunManager.archiveRun).toHaveBeenCalledWith('run-2');
+    });
+  });
+
+  describe('batchDelete', () => {
+    it('deletes multiple runs and returns results', async () => {
+      mockRunManager.deleteRun
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('run is not terminal'));
+
+      const result = await controller.batchDelete({ runIds: ['run-1', 'run-2'] });
+
+      expect(result).toEqual([
+        { runId: 'run-1', status: 'deleted', error: undefined },
+        { runId: 'run-2', status: 'failed', error: 'run is not terminal' }
+      ]);
+      expect(mockRunManager.deleteRun).toHaveBeenCalledWith('run-1');
+      expect(mockRunManager.deleteRun).toHaveBeenCalledWith('run-2');
     });
   });
 });

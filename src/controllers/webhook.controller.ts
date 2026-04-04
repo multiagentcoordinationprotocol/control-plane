@@ -6,11 +6,13 @@ import {
   HttpCode,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   ValidationPipe
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CreateWebhookDto } from '../dto/webhook.dto';
+import { UpdateWebhookDto } from '../dto/update-webhook.dto';
 import { WebhookService } from '../webhooks/webhook.service';
 
 @ApiTags('webhooks')
@@ -35,6 +37,16 @@ export class WebhookController {
   @ApiOperation({ summary: 'List all webhook subscriptions.' })
   async listWebhooks() {
     return this.webhookService.list();
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update a webhook subscription (URL, events, active toggle).' })
+  @ApiBody({ type: UpdateWebhookDto })
+  async updateWebhook(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: UpdateWebhookDto
+  ) {
+    return this.webhookService.update(id, body);
   }
 
   @Delete(':id')

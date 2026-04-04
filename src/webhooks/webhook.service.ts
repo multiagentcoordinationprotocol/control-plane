@@ -28,6 +28,13 @@ export class WebhookService {
     return this.webhookRepository.list();
   }
 
+  async update(
+    id: string,
+    fields: { url?: string; events?: string[]; secret?: string; active?: boolean }
+  ) {
+    return this.webhookRepository.update(id, fields);
+  }
+
   async remove(id: string) {
     return this.webhookRepository.delete(id);
   }

@@ -17,13 +17,15 @@ import { ExportRunQueryDto } from '../dto/export-run-query.dto';
 import { RunBundleExportDto, RunComparisonResultDto } from '../dto/run-responses.dto';
 import { RunInsightsService } from '../insights/run-insights.service';
 import { RunExecutorService } from '../runs/run-executor.service';
+import { RunManagerService } from '../runs/run-manager.service';
 
 @ApiTags('runs')
 @Controller('runs')
 export class RunInsightsController {
   constructor(
     private readonly insightsService: RunInsightsService,
-    private readonly runExecutor: RunExecutorService
+    private readonly runExecutor: RunExecutorService,
+    private readonly runManager: RunManagerService
   ) {}
 
   @Get(':id/export')
@@ -99,5 +101,35 @@ export class RunInsightsController {
     return Promise.all(
       body.runIds.map((id) => this.insightsService.exportRun(id, { includeCanonical: true, includeRaw: false }))
     );
+  }
+
+  @Post('batch/archive')
+  @ApiOperation({ summary: 'Archive multiple runs in batch.' })
+  async batchArchive(
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }
+  ) {
+    const results = await Promise.allSettled(
+      body.runIds.map((id) => this.runManager.archiveRun(id))
+    );
+    return results.map((result, index) => ({
+      runId: body.runIds[index],
+      status: result.status === 'fulfilled' ? 'archived' : 'failed',
+      error: result.status === 'rejected' ? (result.reason instanceof Error ? result.reason.message : String(result.reason)) : undefined
+    }));
+  }
+
+  @Post('batch/delete')
+  @ApiOperation({ summary: 'Delete multiple terminal runs in batch.' })
+  async batchDelete(
+    @Body(new ValidationPipe({ transform: true, whitelist: true })) body: { runIds: string[] }
+  ) {
+    const results = await Promise.allSettled(
+      body.runIds.map((id) => this.runManager.deleteRun(id))
+    );
+    return results.map((result, index) => ({
+      runId: body.runIds[index],
+      status: result.status === 'fulfilled' ? 'deleted' : 'failed',
+      error: result.status === 'rejected' ? (result.reason instanceof Error ? result.reason.message : String(result.reason)) : undefined
+    }));
   }
 }

@@ -159,7 +159,7 @@ export class TestClient {
 
   // ── Internal ───────────────────────────────────────────────────
 
-  private async request<T = any>(
+  async request<T = any>(
     method: string,
     path: string,
     opts?: RequestOptions

@@ -1,0 +1,135 @@
+import { Injectable } from '@nestjs/common';
+import { sql } from 'drizzle-orm';
+import { DatabaseService } from '../db/database.service';
+
+@Injectable()
+export class DashboardService {
+  constructor(private readonly database: DatabaseService) {}
+
+  async getOverview(range: '24h' | '7d' | '30d' = '24h') {
+    const interval = range === '24h' ? '24 hours' : range === '7d' ? '7 days' : '30 days';
+    const bucket = range === '24h' ? '1 hour' : '1 day';
+    const cutoff = sql`now() - interval '${sql.raw(interval)}'`;
+
+    const [kpis, volumeSeries, signalSeries, errorSeries, latencyStats] =
+      await Promise.all([
+        this.getKpis(cutoff),
+        this.getRunVolume(cutoff, bucket),
+        this.getSignalVolume(cutoff, bucket),
+        this.getErrorClasses(cutoff),
+        this.getLatencyStats(cutoff)
+      ]);
+
+    return {
+      kpis: {
+        ...kpis,
+        avgDurationMs: latencyStats.avgDurationMs
+      },
+      charts: {
+        runVolume: volumeSeries,
+        latency: latencyStats.series,
+        signalVolume: signalSeries,
+        errorClasses: errorSeries
+      }
+    };
+  }
+
+  private async getKpis(cutoff: ReturnType<typeof sql>) {
+    const result = await this.database.db.execute(sql`
+      SELECT
+        count(*)::int AS "totalRuns",
+        count(*) FILTER (WHERE status IN ('queued','starting','binding_session','running'))::int AS "activeRuns",
+        count(*) FILTER (WHERE status = 'completed')::int AS "completedRuns",
+        count(*) FILTER (WHERE status = 'failed')::int AS "failedRuns",
+        count(*) FILTER (WHERE status = 'cancelled')::int AS "cancelledRuns"
+      FROM runs
+      WHERE created_at >= ${cutoff}
+    `);
+    const row = result.rows[0] as Record<string, number>;
+    return {
+      totalRuns: row.totalRuns ?? 0,
+      activeRuns: row.activeRuns ?? 0,
+      completedRuns: row.completedRuns ?? 0,
+      failedRuns: row.failedRuns ?? 0,
+      cancelledRuns: row.cancelledRuns ?? 0
+    };
+  }
+
+  private async getRunVolume(
+    cutoff: ReturnType<typeof sql>,
+    bucket: string
+  ) {
+    const result = await this.database.db.execute(sql`
+      SELECT
+        date_trunc(${bucket}, created_at) AS bucket,
+        count(*)::int AS cnt
+      FROM runs
+      WHERE created_at >= ${cutoff}
+      GROUP BY 1
+      ORDER BY 1
+    `);
+    return {
+      labels: result.rows.map((r: any) => String(r.bucket)),
+      data: result.rows.map((r: any) => Number(r.cnt))
+    };
+  }
+
+  private async getSignalVolume(
+    cutoff: ReturnType<typeof sql>,
+    bucket: string
+  ) {
+    const result = await this.database.db.execute(sql`
+      SELECT
+        date_trunc(${bucket}, ts::timestamptz) AS bucket,
+        count(*)::int AS cnt
+      FROM run_events_canonical
+      WHERE type = 'signal.emitted'
+        AND ts::timestamptz >= ${cutoff}
+      GROUP BY 1
+      ORDER BY 1
+    `);
+    return {
+      labels: result.rows.map((r: any) => String(r.bucket)),
+      data: result.rows.map((r: any) => Number(r.cnt))
+    };
+  }
+
+  private async getErrorClasses(cutoff: ReturnType<typeof sql>) {
+    const result = await this.database.db.execute(sql`
+      SELECT
+        COALESCE(error_code, 'UNKNOWN') AS class,
+        count(*)::int AS cnt
+      FROM runs
+      WHERE status = 'failed'
+        AND created_at >= ${cutoff}
+      GROUP BY 1
+      ORDER BY cnt DESC
+      LIMIT 10
+    `);
+    return {
+      labels: result.rows.map((r: any) => String(r.class)),
+      data: result.rows.map((r: any) => Number(r.cnt))
+    };
+  }
+
+  private async getLatencyStats(cutoff: ReturnType<typeof sql>) {
+    const result = await this.database.db.execute(sql`
+      SELECT
+        avg(EXTRACT(EPOCH FROM (ended_at::timestamptz - started_at::timestamptz)) * 1000)::int AS "avgDurationMs"
+      FROM runs
+      WHERE status = 'completed'
+        AND started_at IS NOT NULL
+        AND ended_at IS NOT NULL
+        AND created_at >= ${cutoff}
+    `);
+    const avgDurationMs =
+      (result.rows[0] as Record<string, number> | undefined)?.avgDurationMs ??
+      null;
+
+    // Latency per bucket — return empty series for now (UI charts need it)
+    return {
+      avgDurationMs,
+      series: { labels: [] as string[], data: [] as number[] }
+    };
+  }
+}

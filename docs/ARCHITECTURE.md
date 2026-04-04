@@ -5,61 +5,117 @@
 The MACP Control Plane is a NestJS service that orchestrates multi-agent coordination sessions. It sits between UI clients and a runtime (currently Rust via gRPC), managing the lifecycle of coordination runs.
 
 ```
-┌──────────┐     HTTP/SSE      ┌─────────────────┐      gRPC       ┌──────────────┐
-│ UI Client├───────────────────►│  Control Plane   ├────────────────►│ MACP Runtime │
-│          │◄───────────────────┤  (NestJS)        │◄────────────────┤ (Rust)       │
-└──────────┘                   └────────┬─────────┘                └──────────────┘
-                                        │
-                                        ▼
-                                 ┌──────────────┐
-                                 │  PostgreSQL   │
-                                 └──────────────┘
+┌──────────────┐    HTTP     ┌──────────────────┐    HTTP     ┌──────────────────┐
+│  UI Console  ├────────────►│   /api/proxy      ├────────────►│ Examples Service  │
+│  (Next.js)   │             │   (Next.js API)   │             │ (Catalog+Compile) │
+└──────┬───────┘             └────────┬──────────┘             └──────────────────┘
+       │                              │
+       │                              │ HTTP/SSE
+       │                              ▼
+       │                     ┌──────────────────┐      gRPC      ┌──────────────────┐
+       └────────────────────►│  Control Plane    ├───────────────►│  MACP Runtime    │
+          (via proxy)        │  (NestJS)         │◄───────────────┤  (Rust)          │
+                             └────────┬──────────┘                └──────────────────┘
+                                      │
+                                      ▼
+                               ┌──────────────┐
+                               │  PostgreSQL   │
+                               └──────────────┘
+```
+
+## Two Planes
+
+MACP distinguishes between two communication planes:
+
+```
+┌─────────────────────────────────────┐    ┌───────────────────────────────────┐
+│   COORDINATION PLANE (binding)       │    │   AMBIENT PLANE (non-binding)     │
+│                                      │    │                                   │
+│   Session-bound messages:            │    │   Signals (non-session):          │
+│   SessionStart → Proposal →         │    │   - empty sessionId, empty mode   │
+│   Evaluation → Vote → Commitment    │    │   - broadcast via WatchSignals    │
+│                                      │    │   - progress, status, attention   │
+│   Enters session history.            │    │   Does NOT enter session history.  │
+│   Drives state transitions.          │    │   Used for observability.          │
+└─────────────────────────────────────┘    └───────────────────────────────────┘
 ```
 
 ## Request Flow
 
 ```
 POST /runs
-  → RunsController
+  → RunsController.createRun()
     → RunExecutorService.launch()
       → RunManagerService.createRun()        [status: queued]
       → async execute():
         → markStarted()                      [status: starting]
-        → provider.initialize()              [gRPC]
-        → provider.startSession()            [gRPC]
+        → provider.initialize()              [gRPC — mode validation]
+        → provider.openSession()             [gRPC — bidirectional stream]
+        → await sessionAck                   [runtime confirms session]
         → bindSession()                      [status: binding_session]
-        → send kickoff messages              [gRPC]
+        → send kickoff messages              [through stream handle]
+        → handle.closeWrite()                [half-close write side]
         → markRunning()                      [status: running]
-        → StreamConsumerService.start()      [begins event loop]
+        → StreamConsumerService.start()      [begins event consumption]
 ```
 
 ## Event Pipeline
 
 ```
 Runtime gRPC stream
-  → StreamConsumerService (consumption loop + reconnection)
-    → EventNormalizerService (raw → canonical)
-      → RunEventService (sequence allocation + persistence)
-        → EventRepository.appendRaw/appendCanonical
-        → ProjectionService.applyAndPersist
-        → MetricsService.recordEvents
-        → StreamHubService.publishEvent (SSE → UI)
+  → StreamConsumerService (consumption loop + idle timeout + reconnection)
+    → EventNormalizerService (raw → canonical, including derived events)
+      → RunEventService (transactional sequence allocation + persistence)
+        → EventRepository.appendRaw + appendCanonical
+        → ProjectionService.applyAndPersist (update UI read model)
+        → MetricsService.recordEvents (update counters)
+        → StreamHubService.publishEvent (SSE → live UI subscribers)
+```
+
+## Message Flow (POST /runs/:id/messages)
+
+```
+POST /runs/:id/messages
+  → RunsController.sendMessage()
+    → RunExecutorService.sendMessage()
+      → validate run state (binding_session | running)
+      → resolve modeName from RuntimeSession
+      → encode payload (JSON or proto via ProtoRegistryService)
+      → provider.send()                    [gRPC unary]
+      → emit message.sent canonical event
+      → return { messageId, ack }
+```
+
+## Signal Flow (POST /runs/:id/signal)
+
+```
+POST /runs/:id/signal
+  → RunsController.sendSignal()
+    → RunExecutorService.sendSignal()
+      → validate run state (running)
+      → provider.send() with empty sessionId + modeName    [ambient plane]
+      → emit message.sent canonical event (subject.kind = 'signal')
 ```
 
 ## Layer Map
 
 | Layer | Directory | Responsibility |
 |-------|-----------|---------------|
-| Controllers | `src/controllers/` | HTTP endpoints — runs CRUD, runtime discovery, observability, health |
+| Controllers | `src/controllers/` | HTTP endpoints — runs, runtime, dashboard, webhooks, admin, health |
 | Run Orchestration | `src/runs/` | RunManager (state machine), RunExecutor (coordination), StreamConsumer (event loop) |
-| Runtime Abstraction | `src/runtime/` | `RuntimeProvider` interface, `RustRuntimeProvider` (gRPC), proto registry |
-| Events | `src/events/` | Normalization, persistence pipeline, SSE publishing |
-| Projection | `src/projection/` | Applies canonical events to build UI read models |
+| Runtime Abstraction | `src/runtime/` | `RuntimeProvider` interface, `RustRuntimeProvider` (gRPC), `ProtoRegistryService` |
+| Events | `src/events/` | Normalization (raw→canonical), transactional persistence, SSE publishing |
+| Projection | `src/projection/` | Applies canonical events to build UI read models (versioned) |
+| Dashboard | `src/dashboard/` | Aggregated KPIs and time-series chart data |
+| Insights | `src/insights/` | Export bundles, run comparison |
+| Webhooks | `src/webhooks/` | Webhook registration, HMAC delivery, retry logic |
+| Audit | `src/audit/` | Administrative action logging |
 | Storage | `src/storage/` | Drizzle repository per entity |
-| DB | `src/db/` | Drizzle client as `@Global` NestJS module |
-| Contracts | `src/contracts/` | TypeScript interfaces |
-| DTOs | `src/dto/` | Request/response validation |
-| Errors | `src/errors/` | Error codes, exception classes, global filter |
+| DB | `src/db/` | Drizzle client as `@Global` NestJS module, programmatic migrations |
+| Contracts | `src/contracts/` | TypeScript interfaces for execution and events |
+| DTOs | `src/dto/` | Request/response validation with class-validator |
+| Errors | `src/errors/` | Error codes, AppException, global filter |
+| Telemetry | `src/telemetry/` | OpenTelemetry tracing, Prometheus metrics |
 
 ## Run State Machine
 
@@ -75,18 +131,32 @@ Terminal states: `completed`, `failed`, `cancelled` (no outgoing transitions).
 
 ## Database Schema
 
-7 tables: `runs`, `runtime_sessions`, `run_events_raw`, `run_events_canonical`, `run_projections`, `run_artifacts`, `run_metrics`.
+11 tables: `runs`, `runtime_sessions`, `run_events_raw`, `run_events_canonical`, `run_projections`, `run_artifacts`, `run_metrics`, `run_outbound_messages`, `audit_log`, `webhooks`, `webhook_deliveries`.
 
 Key relationships:
-- All tables reference `runs.id` with `ON DELETE CASCADE`
-- Events use `(run_id, seq)` unique indexes for ordering
-- Projections use run_id as primary key (one projection per run)
-- Metrics use run_id as primary key (one metrics row per run)
+- All run-related tables reference `runs.id` with `ON DELETE CASCADE`
+- Events use `(run_id, seq)` unique indexes for ordering and deduplication
+- Projections use `run_id` as primary key (one projection per run)
+- Webhooks use outbox pattern for reliable delivery
+
+## Coordination Modes
+
+| Mode | Proto Package | Key Message Types |
+|------|--------------|-------------------|
+| Decision | `macp.modes.decision.v1` | Proposal, Evaluation, Objection, Vote |
+| Proposal | `macp.modes.proposal.v1` | Proposal, CounterProposal, Accept, Reject, Withdraw |
+| Task | `macp.modes.task.v1` | TaskRequest, TaskAccept, TaskUpdate, TaskComplete, TaskFail |
+| Handoff | `macp.modes.handoff.v1` | HandoffOffer, HandoffContext, HandoffAccept, HandoffDecline |
+| Quorum | `macp.modes.quorum.v1` | ApprovalRequest, Approve, Reject, Abstain |
+
+All modes terminate with `Commitment` (from `macp.v1.CommitmentPayload`).
 
 ## Key Design Decisions
 
-1. **Scenario-agnostic**: The control plane accepts only fully resolved `ExecutionRequest` — no scenario resolution happens here.
-2. **Three-layer event pipeline**: Raw events → canonical events → projections. Raw events preserve the original runtime data; canonical events provide a normalized, typed view.
-3. **StreamSession first frame**: A subscription envelope (`SessionWatch`) is sent as the first message to the gRPC stream.
-4. **Transactional event persistence**: Sequence allocation + event persistence happen within a single database transaction to prevent gaps.
-5. **Exponential backoff with jitter**: Stream reconnection uses exponential backoff capped at 30s with 20% random jitter.
+1. **Scenario-agnostic**: Accepts only fully resolved `ExecutionRequest` — no scenario resolution.
+2. **Three-layer event pipeline**: Raw → canonical → projections. Raw preserves original data; canonical provides normalized, typed view.
+3. **Bidirectional streaming**: `openSession()` returns a `RuntimeSessionHandle` with send/events/closeWrite/abort.
+4. **Transactional event persistence**: Sequence allocation + persistence in single DB transaction.
+5. **Snake_case → camelCase normalization**: ProtoRegistryService converts Python/JSON snake_case to protobufjs camelCase.
+6. **Proto-encoded payloads**: Real runtime requires proto encoding; control plane supports JSON fallback for testing.
+7. **Circuit breaker**: CLOSED/OPEN/HALF_OPEN wrapping all gRPC unary calls with configurable threshold and reset.
