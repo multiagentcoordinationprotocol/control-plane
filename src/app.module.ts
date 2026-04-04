@@ -6,6 +6,8 @@ import { AuthModule } from './auth/auth.module';
 import { ThrottleByUserGuard } from './auth/throttle-by-user.guard';
 import { ConfigModule } from './config/config.module';
 import { AdminController } from './controllers/admin.controller';
+import { DashboardController } from './controllers/dashboard.controller';
+import { DashboardService } from './dashboard/dashboard.service';
 import { AuditController } from './controllers/audit.controller';
 import { HealthController } from './controllers/health.controller';
 import { MetricsController } from './controllers/metrics.controller';
@@ -54,7 +56,7 @@ import { WebhookService } from './webhooks/webhook.service';
     AuthModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])
   ],
-  controllers: [RunsController, RunInsightsController, RuntimeController, ObservabilityController, HealthController, MetricsController, AdminController, AuditController, WebhookController],
+  controllers: [RunsController, RunInsightsController, RuntimeController, ObservabilityController, HealthController, MetricsController, AdminController, AuditController, WebhookController, DashboardController],
   providers: [
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: ThrottleByUserGuard },
@@ -86,7 +88,8 @@ import { WebhookService } from './webhooks/webhook.service';
     RunInsightsService,
     WebhookRepository,
     WebhookDeliveryRepository,
-    WebhookService
+    WebhookService,
+    DashboardService
   ]
 })
 export class AppModule implements NestModule {
