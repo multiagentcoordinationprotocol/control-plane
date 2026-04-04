@@ -1,0 +1,154 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_mode:
+        description: 'Runtime mode: mock | docker | remote'
+        required: false
+        default: 'mock'
+        type: choice
+        options:
+          - mock
+          - docker
+          - remote
+      runtime_address:
+        description: 'Remote runtime address (only for runtime_mode=remote)'
+        required: false
+        default: ''
+        type: string
+      run_agent_tests:
+        description: 'Run Python agent E2E tests'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  integration-tests:
+    name: TypeScript Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: macp_control_plane_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+        run: npx ts-node src/db/migrate.ts
+
+      - name: Run integration tests
+        env:
+          CI: true
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+          NODE_ENV: development
+          AUTH_API_KEYS: test-key-integration
+          OTEL_ENABLED: false
+          LOG_LEVEL: warn
+          RUNTIME_ADDRESS: ${{ inputs.runtime_address || '127.0.0.1:50051' }}
+          RUNTIME_ALLOW_INSECURE: true
+          RUN_RECOVERY_ENABLED: false
+          INTEGRATION_RUNTIME: ${{ inputs.runtime_mode }}
+        run: npm run test:integration
+
+  agent-e2e-tests:
+    name: Python Agent E2E Tests
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+    if: ${{ inputs.run_agent_tests == true }}
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: macp_control_plane_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: test-agents/requirements.txt
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build control plane
+        run: npm run build
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+        run: node dist/db/migrate.js
+
+      - name: Start control plane
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/macp_control_plane_test
+          NODE_ENV: development
+          AUTH_API_KEYS: test-key-e2e
+          OTEL_ENABLED: false
+          LOG_LEVEL: warn
+          RUNTIME_ADDRESS: '127.0.0.1:50051'
+          RUNTIME_ALLOW_INSECURE: true
+          RUN_RECOVERY_ENABLED: false
+          PORT: 3001
+        run: |
+          node dist/main.js &
+          echo "Waiting for control plane to start..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3001/healthz > /dev/null 2>&1; then
+              echo "Control plane is ready!"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Install Python dependencies
+        run: pip install -r test-agents/requirements.txt
+
+      - name: Run agent E2E tests
+        env:
+          CONTROL_PLANE_URL: http://localhost:3001
+          CONTROL_PLANE_API_KEY: test-key-e2e
+        run: |
+          cd test-agents
+          python -m pytest scenarios/ -v --tb=short -x

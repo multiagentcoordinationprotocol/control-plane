@@ -11,3 +11,13 @@ coverage/
 CLAUDE.md
 /plans/
 .claude/
+
+# Secrets / environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+.macp-data/
